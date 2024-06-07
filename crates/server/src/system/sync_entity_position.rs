@@ -82,9 +82,9 @@ pub fn sync_entity_position(
 
                     // Prevent desync due to rounding error
                     *rounding_error = Vec3::new(
-                        (delta_x / 128.0 - delta[0] as f32 / 128.0) / 32.0,
-                        (delta_y / 128.0 - delta[1] as f32 / 128.0) / 32.0,
-                        (delta_z / 128.0 - delta[2] as f32 / 128.0) / 32.0,
+                        delta[0] as f32,
+                        delta[1] as f32,
+                        delta[2] as f32,
                     );
 
                     delta
