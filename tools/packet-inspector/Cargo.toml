@@ -1,3 +1,5 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "packet-inspector"
 description = "A simple Minecraft proxy for inspecting packets."

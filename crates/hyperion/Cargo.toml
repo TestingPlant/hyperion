@@ -1,3 +1,5 @@
+cargo-features = ["edition2024"]
+
 [[bench]]
 harness = false
 name = "set"
