@@ -189,7 +189,7 @@ impl<T> ThreadHeaplessVec<T> {
         self.inner
             .iter_mut()
             .map(SyncUnsafeCell::get_mut)
-            .flat_map(|inner| Drain::new(inner))
+            .flat_map(|inner| std::mem::take(inner).into_iter())
     }
 
     pub fn is_empty(&mut self) -> bool {
@@ -197,39 +197,5 @@ impl<T> ThreadHeaplessVec<T> {
             .iter_mut()
             .map(SyncUnsafeCell::get_mut)
             .all(|x| x.is_empty())
-    }
-}
-
-struct Drain<'a, T, const N: usize> {
-    inner: &'a mut heapless::Vec<T, N>,
-    idx: usize,
-}
-
-impl<T, const N: usize> Iterator for Drain<'_, T, N> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.inner.len() {
-            return None;
-        }
-
-        let item = self.inner.get(self.idx).unwrap();
-        let item = unsafe { core::ptr::read(item) };
-
-        self.idx += 1;
-
-        Some(item)
-    }
-}
-
-impl<T, const N: usize> Drop for Drain<'_, T, N> {
-    fn drop(&mut self) {
-        unsafe { self.inner.set_len(0) };
-    }
-}
-
-impl<'a, T, const N: usize> Drain<'a, T, N> {
-    pub fn new(inner: &'a mut heapless::Vec<T, N>) -> Self {
-        Self { inner, idx: 0 }
     }
 }
