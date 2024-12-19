@@ -81,7 +81,7 @@ where
 
     trace!("without compression: {len} bytes");
 
-    Ok(buf.advance(len))
+    Ok(unsafe { buf.advance(len) })
 }
 
 impl PacketEncoder {
@@ -152,7 +152,7 @@ impl PacketEncoder {
 
             let len = write.position();
 
-            return Ok(buf.advance(len as usize));
+            return Ok(unsafe { buf.advance(len as usize) });
         }
 
         let data_len_0 = VarInt(0);
@@ -171,7 +171,7 @@ impl PacketEncoder {
 
         let len = pos as u32 + (end_data_position_exclusive - data_write_start) as u32;
 
-        Ok(buf.advance(len as usize))
+        Ok(unsafe { buf.advance(len as usize) })
     }
 
     /// Appends a packet to the buffer which may or may not be compressed.
