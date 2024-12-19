@@ -39,22 +39,3 @@ unsafe impl Buf for bytes::BytesMut {
         self.split_to(len)
     }
 }
-
-unsafe impl Buf for Vec<u8> {
-    type Output = ();
-
-    fn get_contiguous(&mut self, len: usize) -> &mut [u8] {
-        let original_len = self.len();
-        self.resize(std::cmp::max(self.len() + len, self.capacity()), 0);
-        unsafe { self.set_len(original_len); }
-        let cap = &mut self.spare_capacity_mut()[0..len];
-        let cap = unsafe { MaybeUninit::slice_assume_init_mut(cap) };
-        debug_assert!(cap.len() == len);
-        cap
-    }
-
-    unsafe fn advance(&mut self, len: usize) -> Self::Output {
-        debug_assert!(self.len() + len <= self.capacity());
-        unsafe { self.set_len(self.len() + len) };
-    }
-}
