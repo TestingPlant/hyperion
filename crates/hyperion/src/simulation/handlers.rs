@@ -639,7 +639,7 @@ pub fn packet_switch(
 
     // ideally we wouldn't have to do this. The lifetime is the same as the entire tick.
     // as the data is bump-allocated and reset occurs at the end of the tick
-    let data: &'static [u8] = unsafe { core::mem::transmute(data) };
+    let data: &'static [u8] = data.to_owned().leak();
 
     match packet_id {
         play::ChatMessageC2s::ID => chat_message(data, query)?,
