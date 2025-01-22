@@ -470,19 +470,6 @@ pub fn spawn_entity_packet(
 #[derive(Component)]
 pub struct PlayerJoinModule;
 
-#[derive(Component)]
-pub struct RayonWorldStages {
-    stages: Vec<SendableRef<'static>>,
-}
-
-impl Index<usize> for RayonWorldStages {
-    type Output = WorldRef<'static>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.stages[index].0
-    }
-}
-
 impl Module for PlayerJoinModule {
     fn module(world: &World) {
         let query = world.new_query::<(
@@ -496,23 +483,6 @@ impl Module for PlayerJoinModule {
         )>();
 
         let query = SendableQuery(query);
-
-        let rayon_threads = rayon::current_num_threads();
-
-        #[expect(
-            clippy::unwrap_used,
-            reason = "realistically, this should never fail; 2^31 is very large"
-        )]
-        let rayon_threads = i32::try_from(rayon_threads).unwrap();
-
-        let stages = (0..rayon_threads)
-            // SAFETY: promoting world to static lifetime, system won't outlive world
-            .map(|i| unsafe { std::mem::transmute(world.stage(i)) })
-            .map(SendableRef)
-            .collect::<Vec<_>>();
-
-        world.component::<RayonWorldStages>();
-        world.set(RayonWorldStages { stages });
 
         let root_command = world.entity().set(Command::ROOT);
 
@@ -532,11 +502,11 @@ impl Module for PlayerJoinModule {
             &Compose($),
             &CraftingRegistry($),
             &Config($),
-            &RayonWorldStages($),
         )
         .kind::<flecs::pipeline::PreUpdate>()
         .each_iter(
-            move |it, _, (comms, compose, crafting_registry, config, stages)| {
+            move |it, _, (comms, compose, crafting_registry, config)| {
+                let world = it.world();
                 let span = tracing::info_span!("joins");
                 let _enter = span.enter();
 
@@ -549,11 +519,9 @@ impl Module for PlayerJoinModule {
                 }
 
                 // todo: par_iter but bugs...
-                // for (entity, skin) in skins {
-                skins.into_par_iter().for_each(|(entity, skin)| {
+                for (entity, skin) in skins {
                     // if we are not in rayon context that means we are in a single-threaded context and 0 will work
                     let idx = rayon::current_thread_index().unwrap_or(0);
-                    let world = &stages[idx];
 
                     let system = system.entity_view(world);
 
@@ -578,7 +546,7 @@ impl Module for PlayerJoinModule {
                                 position,
                                 yaw,
                                 pitch,
-                                world,
+                                &world,
                                 &skin,
                                 system,
                                 root_command,
@@ -595,7 +563,7 @@ impl Module for PlayerJoinModule {
                     entity.set(skin);
 
                     entity.add_enum(PacketState::Play);
-                });
+                }
             },
         );
     }
