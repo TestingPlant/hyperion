@@ -112,9 +112,8 @@ async fn inner(
                             }
                         };
 
-                        let result = unsafe {
-                            rkyv::access_unchecked::<ArchivedProxyToServerMessage<'_>>(&buffer)
-                        };
+                        let result = 
+                            rkyv::access::<ArchivedProxyToServerMessage<'_>, rkyv::rancor::Error>(&buffer).unwrap();
 
                         match result {
                             ArchivedProxyToServerMessage::PlayerConnect(message) => {
