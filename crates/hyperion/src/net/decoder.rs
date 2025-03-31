@@ -1,6 +1,7 @@
 use std::{
     cell::Cell,
     ops::{Index, RangeFull},
+    sync::atomic::{Ordering, AtomicUsize, AtomicI32}
 };
 
 use anyhow::{Context, bail, ensure};
@@ -12,20 +13,19 @@ use valence_protocol::{
 
 #[derive(Default)]
 struct RefBytesMut {
-    cursor: Cell<usize>,
+    cursor: AtomicUsize,
     inner: Vec<u8>,
 }
 
 impl RefBytesMut {
+    // TODO: any intended usage of this function seems sketchy
     pub fn advance(&self, amount: usize) {
-        let on = self.cursor.get();
-        self.cursor.set(on + amount);
+        self.cursor.fetch_add(amount, Ordering::Relaxed);
     }
 
     pub fn split_to(&self, len: usize) -> &[u8] {
-        let before = self.cursor.get();
+        let before = self.cursor.fetch_add(len, Ordering::Relaxed);
         let after = before + len;
-        self.cursor.set(after);
 
         #[expect(
             clippy::indexing_slicing,
@@ -35,14 +35,11 @@ impl RefBytesMut {
     }
 }
 
-unsafe impl Sync for RefBytesMut {}
-unsafe impl Send for RefBytesMut {}
-
 impl Index<RangeFull> for RefBytesMut {
     type Output = [u8];
 
     fn index(&self, _: RangeFull) -> &Self::Output {
-        let on = self.cursor.get();
+        let on = self.cursor.load(Ordering::Relaxed);
         #[expect(
             clippy::indexing_slicing,
             reason = "this is probably fine? todo: verify"
@@ -52,14 +49,11 @@ impl Index<RangeFull> for RefBytesMut {
 }
 
 /// A buffer for saving bytes that are not yet decoded.
-#[derive(Default, Component)]
+#[derive(Component)]
 pub struct PacketDecoder {
     buf: RefBytesMut,
-    threshold: Cell<CompressionThreshold>,
+    threshold: AtomicI32,
 }
-
-unsafe impl Send for PacketDecoder {}
-unsafe impl Sync for PacketDecoder {}
 
 #[derive(Copy, Clone)]
 pub struct BorrowedPacketFrame<'a> {
@@ -139,8 +133,10 @@ impl PacketDecoder {
 
         let mut data;
 
+        let threshold = self.compression().0;
+
         #[expect(clippy::cast_sign_loss, reason = "we are checking if < 0")]
-        if self.threshold.get().0 >= 0 {
+        if threshold >= 0 {
             r = &r[..packet_len as usize];
 
             let data_len = VarInt::decode(&mut r)?.0;
@@ -153,10 +149,10 @@ impl PacketDecoder {
             // Is this packet compressed?
             if data_len > 0 {
                 ensure!(
-                    data_len > self.threshold.get().0,
+                    data_len > threshold,
                     "decompressed packet length of {data_len} is <= the compression threshold of \
                      {}",
-                    self.threshold.get().0
+                    threshold
                 );
 
                 // todo(perf): make uninit memory ...  MaybeUninit
@@ -183,10 +179,10 @@ impl PacketDecoder {
                 debug_assert_eq!(data_len, 0, "{data_len} != 0");
 
                 ensure!(
-                    r.len() <= self.threshold.get().0 as usize,
+                    r.len() <= threshold as usize,
                     "uncompressed packet length of {} exceeds compression threshold of {}",
                     r.len(),
-                    self.threshold.get().0
+                    threshold
                 );
 
                 let remaining_len = r.len();
@@ -218,35 +214,44 @@ impl PacketDecoder {
     }
 
     pub fn shift_excess(&mut self) {
-        let read_position = self.buf.cursor.get();
+        let read_position = self.buf.cursor.get_mut();
 
-        if read_position == 0 {
+        if *read_position == 0 {
             return;
         }
 
-        let excess_len = self.buf.inner.len() - read_position;
+        let excess_len = self.buf.inner.len() - *read_position;
 
-        self.buf.inner.copy_within(read_position.., 0);
+        self.buf.inner.copy_within((*read_position).., 0);
         self.buf.inner.resize_with(excess_len, || unsafe {
             core::hint::unreachable_unchecked()
         });
 
-        self.buf.cursor.set(0);
+        *read_position = 0;
     }
 
     /// Get the compression threshold.
     #[must_use]
     pub fn compression(&self) -> CompressionThreshold {
-        self.threshold.get()
+        CompressionThreshold(self.threshold.load(Ordering::Relaxed))
     }
 
     /// Sets the compression threshold.
     pub fn set_compression(&self, threshold: CompressionThreshold) {
-        self.threshold.set(threshold);
+        self.threshold.store(threshold.0, Ordering::Relaxed);
     }
 
     /// Queues a slice of bytes into the buffer.
     pub fn queue_slice(&mut self, bytes: &[u8]) {
         self.buf.inner.extend_from_slice(bytes);
+    }
+}
+
+impl Default for PacketDecoder {
+    fn default() -> Self {
+        Self {
+            buf: RefBytesMut::default(),
+            threshold: AtomicI32::new(CompressionThreshold::default().0)
+        }
     }
 }
