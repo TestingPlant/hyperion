@@ -133,7 +133,8 @@ impl PacketDecoder {
 
         let mut data;
 
-        let threshold = self.compression().0;
+        assert!(self.compression().0 < 0);
+        let threshold = i32::MAX;
 
         #[expect(clippy::cast_sign_loss, reason = "we are checking if < 0")]
         if threshold >= 0 {
@@ -189,7 +190,8 @@ impl PacketDecoder {
 
                 self.buf.advance(packet_len_len + 1);
 
-                data = self.buf.split_to(remaining_len);
+                // TODO: is this correct??
+                data = self.buf.split_to(packet_len as usize);
             }
         } else {
             self.buf.advance(packet_len_len);
