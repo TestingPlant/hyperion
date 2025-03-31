@@ -176,7 +176,7 @@ impl PacketDecoder {
 
                 data = &*decompression_buf;
             } else {
-                debug_assert_eq!(data_len, 0, "{data_len} != 0");
+                ensure!(data_len == 0, "compressed packet data length is {data_len} but it cannot be be negative");
 
                 ensure!(
                     r.len() <= threshold as usize,
