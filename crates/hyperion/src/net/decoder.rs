@@ -223,9 +223,7 @@ impl PacketDecoder {
         let excess_len = self.buf.inner.len() - *read_position;
 
         self.buf.inner.copy_within((*read_position).., 0);
-        self.buf.inner.resize_with(excess_len, || unsafe {
-            core::hint::unreachable_unchecked()
-        });
+        self.buf.inner.truncate(excess_len);
 
         *read_position = 0;
     }
