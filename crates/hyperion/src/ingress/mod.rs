@@ -311,9 +311,11 @@ impl Module for IngressModule {
                     error!("failed to get id for disconnect stream {disconnect:?}");
                     continue;
                 };
-                world
-                    .entity_from_id(*id)
-                    .set(PendingRemove::new("disconnected"));
+                info!("about to get client entity");
+                let entity = world.entity_from_id(*id);
+                info!("about to set a state");
+                entity.set(PendingRemove::new("disconnected"));
+                info!("the server should've crashed by now");
             }
         });
 
@@ -451,80 +453,7 @@ impl Module for IngressModule {
                 let entity = it.entity(row);
 
                 let bump = compose.bump.get(&world);
-
-                loop {
-                    let frame = match decoder.try_next_packet(bump) {
-                        Ok(frame) => frame,
-                        Err(e) => {
-                            error!("failed to decode packet: {e}");
-                            entity.destruct();
-                            break;
-                        }
-                    };
-
-                    let Some(frame) = frame else {
-                        break;
-                    };
-
-                    match *login_state {
-                        PacketState::Handshake => {
-                            if process_handshake(login_state, &frame).is_err() {
-                                error!("failed to process handshake");
-
-                                entity.destruct();
-
-                                break;
-                            }
-                        }
-                        PacketState::Status => {
-                        }
-                        PacketState::Login => {
-                            if let Err(e) = process_login(
-                                &world,
-                                tasks,
-                                login_state,
-                                decoder,
-                                comms,
-                                skins_collection.clone(),
-                                mojang.clone(),
-                                &frame,
-                                io_ref,
-                                compose,
-                                &entity,
-                                system,
-                                ign_map,
-                            ) {
-                                error!("failed to process login packet");
-                                let msg = format!(
-                                    "§c§lFailed to process login packet:§r\n\n§4{e}§r\n\n§eAre \
-                                     you on the right version of Minecraft?§r\n§b(Required: \
-                                     1.20.1)§r"
-                                );
-
-                                // hopefully we were in no compression mode
-                                // todo we want to handle sending different based on whether
-                                // we sent compression packet or not
-                                if let Err(e) = compose.unicast_no_compression(
-                                    &login::LoginDisconnectS2c {
-                                        reason: msg.into_cow_text(),
-                                    },
-                                    io_ref,
-                                    system,
-                                ) {
-                                    error!("failed to send login disconnect packet: {e}");
-                                }
-
-                                entity.destruct();
-                                break;
-                            }
-                        }
-                        PacketState::Play => {
-                        }
-                        PacketState::Terminate => {
-                            // todo
-                        }
-                    }
-                }
+                entity.destruct();
             },
         );
     }
