@@ -11,7 +11,6 @@ use ordered_float::NotNan;
 use rayon::iter::Either;
 
 use super::{
-    egress::player_join::RayonWorldStages,
     glam::Vec3,
     simulation::{
         EntitySize, Position, aabb,
@@ -66,17 +65,8 @@ pub fn get_first_collision(
 }
 
 fn get_aabb_func<'a>(world: &'a World) -> impl Fn(&Entity) -> Aabb + Send + Sync {
-    let stages: &'a RayonWorldStages = world.get::<&RayonWorldStages>(|stages| {
-        // we can properly extend lifetimes here
-        unsafe { core::mem::transmute(stages) }
-    });
-
     |entity: &Entity| {
-        let rayon_thread = rayon::current_thread_index().unwrap_or_default();
-
-        stages[rayon_thread]
-            .entity_from_id(*entity)
-            .get::<(&Position, &EntitySize)>(|(position, size)| aabb(**position, *size))
+        unimplemented!()
     }
 }
 
