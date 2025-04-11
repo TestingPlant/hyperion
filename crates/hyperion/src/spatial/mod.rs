@@ -137,16 +137,5 @@ impl Module for SpatialModule {
         world.component::<Spatial>();
         world.component::<SpatialIndex>();
         world.add::<SpatialIndex>();
-
-        system!(
-            "recalculate_spatial_index",
-            world,
-            &mut SpatialIndex($),
-        )
-        .with::<flecs::pipeline::OnStore>()
-        .each_iter(|it, _, index| {
-            let world = it.world();
-            index.recalculate(&world);
-        });
     }
 }

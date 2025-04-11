@@ -71,7 +71,7 @@ impl SkinHandler {
             return Ok(None);
         };
 
-        let skin = unsafe { rkyv::access_unchecked::<ArchivedPlayerSkin>(skin) };
+        let skin = rkyv::access::<ArchivedPlayerSkin, rkyv::rancor::Error>(skin).unwrap();
         let skin = rkyv::deserialize::<_, rkyv::rancor::Error>(skin).unwrap();
         Ok(Some(skin))
     }

@@ -31,7 +31,6 @@ use crate::{
         blocks::Blocks,
         handlers::PacketSwitchQuery,
         metadata::{MetadataPrefabs, entity::Pose},
-        packet::HandlerRegistry,
         skin::PlayerSkin,
     },
     storage::{Events, PlayerJoinServer, SkinHandler},
@@ -113,38 +112,15 @@ fn process_login(
 
     let global = compose.global();
 
-    let pkt = LoginCompressionS2c {
-        threshold: VarInt(global.shared.compression_threshold.0),
-    };
-
-    compose.unicast_no_compression(&pkt, stream_id, system)?;
-
-    decoder.set_compression(global.shared.compression_threshold);
-
     let username = Arc::from(username);
 
     let uuid = profile_id.unwrap_or_else(|| offline_uuid(&username));
     let uuid_s = format!("{uuid:?}").dimmed();
     info!("Starting login: {username} {uuid_s}");
 
-    let skins = comms.skins_tx.clone();
     let id = entity.id();
 
-    tasks.spawn(async move {
-        let skin = match PlayerSkin::from_uuid(uuid, &mojang, &skins_collection).await {
-            Ok(Some(skin)) => skin,
-            Err(e) => {
-                error!("failed to get skin {e}. Using empty skin");
-                PlayerSkin::EMPTY
-            }
-            Ok(None) => {
-                error!("failed to get skin. Using empty skin");
-                PlayerSkin::EMPTY
-            }
-        };
-
-        skins.send((id, skin)).unwrap();
-    });
+    comms.skins_tx.send((id, PlayerSkin::EMPTY)).unwrap();
 
     let pkt = login::LoginSuccessS2c {
         uuid,
@@ -160,19 +136,19 @@ fn process_login(
 
     ign_map.insert(username.clone(), entity.id(), world);
 
-    world.get::<&MetadataPrefabs>(|prefabs| {
-        entity
-            .is_a_id(prefabs.player_base)
-            .set(Name::from(username))
-            .add::<AiTargetable>()
-            .set(ImmuneStatus::default())
-            .set(Uuid::from(uuid))
-            .add::<Xp>()
-            .set_pair::<Prev, _>(Xp::default())
-            .add::<ChunkSendQueue>()
-            .add::<Velocity>()
-            .set(ChunkPosition::null())
-    });
+    let player_base = world.get::<&MetadataPrefabs>(|prefabs| prefabs.player_base);
+    entity
+        .is_a_id(player_base)
+        .set(Name::from(username))
+        .add::<AiTargetable>()
+        .set(ImmuneStatus::default())
+        .set(Uuid::from(uuid))
+        .add::<Xp>()
+        .set_pair::<Prev, _>(Xp::default())
+        .add::<ChunkSendQueue>()
+        .add::<Velocity>()
+        .set(ChunkPosition::null())
+        .set(Velocity::default());
 
     compose.io_buf().set_receive_broadcasts(stream_id, world);
 
@@ -428,13 +404,12 @@ impl Module for IngressModule {
             &Comms($),
             &SkinHandler($),
             &MojangClient($),
-            &HandlerRegistry($),
             &mut PacketDecoder,
             &mut PacketState,
             &ConnectionId,
             ?&mut Pose,
             &Events($),
-            &mut EntitySize,
+            &EntitySize,
             ?&mut Position,
             &mut Yaw,
             &mut Pitch,
@@ -456,7 +431,6 @@ impl Module for IngressModule {
                 comms,
                 skins_collection,
                 mojang,
-                handler_registry,
                 decoder,
                 login_state,
                 &io_ref,
@@ -503,13 +477,6 @@ impl Module for IngressModule {
                             }
                         }
                         PacketState::Status => {
-                            if let Err(e) =
-                                process_status(login_state, system, &frame, io_ref, compose)
-                            {
-                                error!("failed to process status packet: {e}");
-                                entity.destruct();
-                                break;
-                            }
                         }
                         PacketState::Login => {
                             if let Err(e) = process_login(
@@ -552,44 +519,6 @@ impl Module for IngressModule {
                             }
                         }
                         PacketState::Play => {
-                            // We call this code when you're in play.
-                            // Transitioning to play is just a way to make sure that the player is officially in play before we start sending them play packets.
-                            // We have a certain duration that we wait before doing this.
-                            // todo: better way?
-                            if let Some((position, pose)) = position.as_mut().zip(pose.as_mut()) {
-                                let world = &world;
-                                let id = entity.id();
-
-                                let mut query = PacketSwitchQuery {
-                                    id,
-                                    view: entity,
-                                    compose,
-                                    io_ref,
-                                    position,
-                                    yaw,
-                                    pitch,
-                                    size,
-                                    pose,
-                                    events: event_queue,
-                                    world,
-                                    blocks,
-                                    system,
-                                    confirm_block_sequences,
-                                    inventory,
-                                    animation,
-                                    crafting_registry,
-                                    handler_registry,
-                                };
-
-                                // info_span!("ingress", ign = name).in_scope(|| {
-                                // SAFETY: The packet bytes are allocated in the compose bump
-                                if let Err(err) = unsafe {
-                                    crate::simulation::handlers::packet_switch(frame, &mut query)
-                                } {
-                                    error!("failed to process packet {frame:?}: {err}");
-                                }
-                                // });
-                            }
                         }
                         PacketState::Terminate => {
                             // todo

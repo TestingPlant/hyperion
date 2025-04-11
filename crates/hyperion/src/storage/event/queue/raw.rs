@@ -53,29 +53,15 @@ impl<T: Copy> RawQueue<T> {
     }
 
     pub fn push(&self, elem: T) -> anyhow::Result<()> {
-        let ptr = self.len.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        let elems = &*self.elems;
-
-        let Some(ptr) = elems.get(ptr) else {
-            self.len.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            bail!("queue is full");
-        };
-
-        let ptr = unsafe { &mut *ptr.get() };
-        ptr.write(elem);
-
-        Ok(())
+        unimplemented!()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
-        let len = self.len.load(std::sync::atomic::Ordering::Relaxed);
-
-        (0..len).map(move |i| {
-            let elem = &self.elems[i];
-            let elem = unsafe { &*elem.get() };
-            unsafe { elem.assume_init_read() }
-        })
+        if true {
+            unimplemented!()
+        } else {
+            std::iter::empty()
+        }
     }
 
     pub fn reset(&mut self) {
