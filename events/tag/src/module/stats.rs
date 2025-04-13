@@ -21,7 +21,6 @@ impl Module for StatsModule {
         let mut last_frame_time_total = 0.0;
 
         system!("stats", world, &Compose($))
-            .multi_threaded()
             .each_iter(move |it, _, compose| {
                 let span = info_span!("stats");
                 let _enter = span.enter();
