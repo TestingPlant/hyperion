@@ -321,7 +321,6 @@ impl Module for IngressModule {
             .system_named::<(&ReceiveState, &ConnectionId, &mut PacketDecoder)>("ingress_to_ecs")
             .term_at(0u32)
             .singleton() // StreamLookup
-            // .multi_threaded()
             .immediate(true)
             .kind::<flecs::pipeline::PostLoad>()
             .each(move |(receive, connection_id, decoder)| {
@@ -420,7 +419,6 @@ impl Module for IngressModule {
             &IgnMap($),
         )
         .kind::<flecs::pipeline::OnUpdate>()
-        .multi_threaded()
         .each_iter(
             move |it,
                   row,
