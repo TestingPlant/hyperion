@@ -419,6 +419,7 @@ impl Module for IngressModule {
             &IgnMap($),
         )
         .kind::<flecs::pipeline::OnUpdate>()
+        .multi_threaded()
         .each_iter(
             move |it,
                   row,
