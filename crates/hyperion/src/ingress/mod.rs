@@ -111,7 +111,8 @@ fn process_login(
     info!("Starting login: {username} {uuid}");
 
     entity
-        .set(Name::from(username));
+        .set(Name::from(username))
+        .set(Uuid::from(uuid));
 
     Ok(())
 }
