@@ -103,54 +103,15 @@ fn process_login(
 
     let username = username.0;
 
-    let player_join = PlayerJoinServer {
-        username: username.to_string(),
-        entity: entity.id(),
-    };
-
-    let username = player_join.username.as_str();
-
     let global = compose.global();
 
     let username = Arc::from(username);
 
-    let uuid = profile_id.unwrap_or_else(|| offline_uuid(&username));
-    let uuid_s = format!("{uuid:?}").dimmed();
-    info!("Starting login: {username} {uuid_s}");
+    let uuid = offline_uuid(&username);
+    info!("Starting login: {username} {uuid}");
 
-    let id = entity.id();
-
-    comms.skins_tx.send((id, PlayerSkin::EMPTY)).unwrap();
-
-    let pkt = login::LoginSuccessS2c {
-        uuid,
-        username: Bounded(&username),
-        properties: Cow::default(),
-    };
-
-    compose
-        .unicast(&pkt, stream_id, system)
-        .context("failed to send login success packet")?;
-
-    *login_state = PacketState::Play;
-
-    ign_map.insert(username.clone(), entity.id(), world);
-
-    let player_base = world.get::<&MetadataPrefabs>(|prefabs| prefabs.player_base);
     entity
-        .is_a_id(player_base)
-        .set(Name::from(username))
-        .add::<AiTargetable>()
-        .set(ImmuneStatus::default())
-        .set(Uuid::from(uuid))
-        .add::<Xp>()
-        .set_pair::<Prev, _>(Xp::default())
-        .add::<ChunkSendQueue>()
-        .add::<Velocity>()
-        .set(ChunkPosition::null())
-        .set(Velocity::default());
-
-    compose.io_buf().set_receive_broadcasts(stream_id, world);
+        .set(Name::from(username));
 
     Ok(())
 }
