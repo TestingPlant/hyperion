@@ -48,34 +48,5 @@ impl Module for PermissionModule {
             let storage = storage::PermissionStorage::new(db).unwrap();
             world.set(storage);
         });
-
-        observer!(world, flecs::OnSet, &Uuid, &storage::PermissionStorage($))
-            .with::<Player>()
-            .each_entity(|entity, (uuid, permissions)| {
-                let group = permissions.get(**uuid);
-                entity.set(group);
-            });
-
-        observer!(world, flecs::OnRemove, &Uuid, &Group, &storage::PermissionStorage($))
-            .with::<Player>()
-            .each(|(uuid, group, permissions)| {
-                permissions.set(**uuid, *group).unwrap();
-            });
-
-        observer!(world, flecs::OnSet, &Group).each_iter(|it, row, _group| {
-            let system = it.system();
-            let world = it.world();
-            let entity = it.entity(row);
-
-            let root_command = hyperion::simulation::command::get_root_command_entity();
-
-            let cmd_pkt = get_command_packet(&world, root_command, Some(*entity));
-
-            entity.get::<&ConnectionId>(|stream| {
-                world.get::<&Compose>(|compose| {
-                    compose.unicast(&cmd_pkt, *stream, system).unwrap();
-                });
-            });
-        });
     }
 }

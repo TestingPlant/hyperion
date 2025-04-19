@@ -303,49 +303,6 @@ impl Module for IngressModule {
                 bytes.clear();
             });
 
-        system!(
-            "remove_player_from_visibility",
-            world,
-            &Uuid,
-            &Compose($),
-            &ConnectionId,
-            &PendingRemove,
-        )
-        .kind::<flecs::pipeline::PostLoad>()
-        .each_iter(move |it, row, (uuid, compose, io, pending_remove)| {
-            let system = it.system();
-            let entity = it.entity(row);
-            let uuids = &[uuid.0];
-            let entity_ids = [VarInt(entity.minecraft_id())];
-
-            // destroy
-            let pkt = play::EntitiesDestroyS2c {
-                entity_ids: Cow::Borrowed(&entity_ids),
-            };
-
-            if let Err(e) = compose.broadcast(&pkt, system).send() {
-                error!("failed to send player remove packet: {e}");
-                return;
-            }
-
-            let pkt = play::PlayerRemoveS2c {
-                uuids: Cow::Borrowed(uuids),
-            };
-
-            if let Err(e) = compose.broadcast(&pkt, system).send() {
-                error!("failed to send player remove packet: {e}");
-            }
-
-            if !pending_remove.reason.is_empty() {
-                let pkt = play::DisconnectS2c {
-                    reason: pending_remove.reason.clone().into_cow_text(),
-                };
-
-                if let Err(e) = compose.unicast_no_compression(&pkt, *io, system) {
-                    error!("failed to send disconnect packet: {e}");
-                }
-            }
-        });
 
         world
             .system_named::<()>("remove_player")

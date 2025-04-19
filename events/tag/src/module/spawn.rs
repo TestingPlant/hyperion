@@ -50,35 +50,6 @@ pub fn avoid_blocks() -> RoaringBitmap {
 
 impl Module for SpawnModule {
     fn module(world: &World) {
-        let positions = Rc::new(RefCell::new(FxHashMap::default()));
-        let avoid_blocks = avoid_blocks();
-
-        observer!(
-            world,
-            flecs::OnSet,
-            &Uuid,
-            &mut Blocks($),
-            &AsyncRuntime($) ,
-        )
-        .without::<Position>()
-        .each_entity({
-            let positions = Rc::clone(&positions);
-            move |entity, (uuid, blocks, runtime)| {
-                let mut positions = positions.borrow_mut();
-                let position = *positions
-                    .entry(uuid.0)
-                    .or_insert_with(|| find_spawn_position(blocks, runtime, &avoid_blocks));
-
-                entity.set(Position::from(position));
-            }
-        });
-
-        world
-            .observer::<flecs::OnRemove, (&Uuid, &Position)>()
-            .each(move |(uuid, position)| {
-                let mut positions = positions.borrow_mut();
-                positions.insert(uuid.0, **position);
-            });
     }
 }
 
