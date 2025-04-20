@@ -15,7 +15,6 @@ panic = 'abort'
 
 [workspace]
 members = [
-    'crates/geometry',
     'crates/hyperion',
     'crates/hyperion-proto',
     'crates/hyperion-proxy',
@@ -120,9 +119,6 @@ version = '1.1.1'
 [workspace.dependencies.flecs_ecs]
 features = ['flecs_manual_registration']
 git = 'https://github.com/Indra-db/Flecs-Rust'
-
-[workspace.dependencies.geometry]
-path = 'crates/geometry'
 
 [workspace.dependencies.hyperion]
 path = 'crates/hyperion'

@@ -3,7 +3,6 @@ use std::{borrow::Borrow, collections::HashMap, hash::Hash, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use derive_more::{Constructor, Deref, DerefMut, Display, From};
 use flecs_ecs::prelude::*;
-use geometry::aabb::Aabb;
 use glam::{DVec3, I16Vec2, IVec3, Quat, Vec3};
 use hyperion_utils::EntityExt;
 use rustc_hash::FxHashMap;
@@ -503,25 +502,6 @@ impl ChunkPosition {
             position: I16Vec2::new(SANE_MAX_RADIUS, SANE_MAX_RADIUS),
         }
     }
-}
-
-#[must_use]
-pub fn aabb(position: Vec3, size: EntitySize) -> Aabb {
-    let half_width = size.half_width;
-    let height = size.height;
-    Aabb::new(
-        position - Vec3::new(half_width, 0.0, half_width),
-        position + Vec3::new(half_width, height, half_width),
-    )
-}
-
-#[must_use]
-pub fn block_bounds(position: Vec3, size: EntitySize) -> (IVec3, IVec3) {
-    let bounding = aabb(position, size);
-    let min = bounding.min.floor().as_ivec3();
-    let max = bounding.max.ceil().as_ivec3();
-
-    (min, max)
 }
 
 /// The initial player spawn position. todo: this should not be a constant
