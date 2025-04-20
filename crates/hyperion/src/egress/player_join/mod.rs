@@ -37,7 +37,6 @@ use crate::{
         skin::PlayerSkin,
         util::registry_codec_raw,
     },
-    util::{SendableQuery, SendableRef},
 };
 
 
