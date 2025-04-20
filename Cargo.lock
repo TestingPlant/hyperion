@@ -2806,7 +2806,6 @@ dependencies = [
  "humantime",
  "hyperion-genmap",
  "hyperion-proto",
- "hyperion-text",
  "hyperion-utils",
  "indexmap",
  "itertools 0.14.0",

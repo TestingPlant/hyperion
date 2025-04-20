@@ -57,25 +57,3 @@ impl<'a> Decode<'a> for EntityEquipmentUpdateS2c<'static> {
         })
     }
 }
-
-#[derive(Clone, Debug, Encode, Packet)]
-pub struct BossBarS2c<'a> {
-    pub id: Uuid,
-    pub action: BossBarAction<'a>,
-}
-
-#[derive(Clone, PartialEq, Debug, Encode)]
-pub enum BossBarAction<'a> {
-    Add {
-        title: hyperion_text::Text<'a>,
-        health: f32,
-        color: BossBarColor,
-        division: BossBarDivision,
-        flags: BossBarFlags,
-    },
-    Remove,
-    UpdateHealth(f32),
-    UpdateTitle(hyperion_text::Text<'a>),
-    UpdateStyle(BossBarColor, BossBarDivision),
-    UpdateFlags(BossBarFlags),
-}
