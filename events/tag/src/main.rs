@@ -20,10 +20,6 @@ use serde::Deserialize;
 use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt};
 // use tracing_tracy::TracyLayer;
 
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 /// The arguments to run the server
 #[derive(Parser, Deserialize, Debug)]
 struct Args {
