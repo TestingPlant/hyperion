@@ -80,7 +80,7 @@ use crate::{
     ingress::PendingRemove,
     net::{ConnectionId, PacketDecoder, proxy::ReceiveState},
     runtime::Tasks,
-    simulation::{EgressComm, EntitySize, IgnMap, PacketState, Player, packet::HandlerRegistry},
+    simulation::{EgressComm, EntitySize, IgnMap, PacketState, Player},
     util::mojang::ApiProvider,
 };
 
@@ -322,9 +322,6 @@ impl HyperionCore {
 
         let tasks = Tasks { tasks: task_rx };
         world.set(tasks);
-
-        world.component::<HandlerRegistry>();
-        world.set(HandlerRegistry::default());
 
         info!("initializing database");
         let db = LocalDb::new()?;

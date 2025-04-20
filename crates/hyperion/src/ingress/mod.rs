@@ -29,7 +29,6 @@ use crate::{
         Yaw,
         animation::ActiveAnimation,
         blocks::Blocks,
-        handlers::PacketSwitchQuery,
         metadata::{MetadataPrefabs, entity::Pose},
         skin::PlayerSkin,
     },

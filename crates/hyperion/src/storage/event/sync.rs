@@ -2,10 +2,6 @@ use flecs_ecs::core::Entity;
 use hyperion_utils::Lifetime;
 use valence_protocol::Hand;
 
-use crate::simulation::handlers::PacketSwitchQuery;
-
-pub type EventFn<T> = Box<dyn Fn(&mut PacketSwitchQuery<'_>, &T) + 'static + Send + Sync>;
-
 pub struct CommandCompletionRequest<'a> {
     pub query: &'a str,
     pub id: i32,
