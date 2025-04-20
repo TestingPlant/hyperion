@@ -15,7 +15,6 @@ panic = 'abort'
 
 [workspace]
 members = [
-    'crates/bvh-region',
     'crates/geometry',
     'crates/hyperion',
     'crates/hyperion-proto',
@@ -98,9 +97,6 @@ uuid = '1.16.0'
 
 [workspace.dependencies.bvh]
 git = 'https://github.com/andrewgazelka/bvh-data'
-
-[workspace.dependencies.bvh-region]
-path = 'crates/bvh-region'
 
 [workspace.dependencies.bytemuck]
 features = ['derive']
