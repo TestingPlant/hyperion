@@ -10,7 +10,6 @@ use valence_protocol::{
 };
 use valence_server::ItemKind;
 
-use super::blocks::RayCollision;
 use crate::simulation::skin::PlayerSkin;
 
 #[derive(Component, Default, Debug)]
@@ -141,12 +140,6 @@ unsafe impl Lifetime for ClientStatusEvent {
 #[derive(Clone, Debug)]
 pub struct ProjectileEntityEvent {
     pub client: Entity,
-    pub projectile: Entity,
-}
-
-#[derive(Clone, Debug)]
-pub struct ProjectileBlockEvent {
-    pub collision: RayCollision,
     pub projectile: Entity,
 }
 

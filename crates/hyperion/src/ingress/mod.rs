@@ -17,18 +17,16 @@ use valence_text::IntoText;
 
 use crate::{
     Prev, Shutdown,
-    egress::sync_chunks::ChunkSendQueue,
     net::{
         Compose, ConnectionId, MINECRAFT_VERSION, PROTOCOL_VERSION, PacketDecoder,
         decoder::BorrowedPacketFrame, proxy::ReceiveState,
     },
     runtime::AsyncRuntime,
     simulation::{
-        AiTargetable, ChunkPosition, Comms, ConfirmBlockSequences, EntitySize, IgnMap,
+        AiTargetable, Comms, ConfirmBlockSequences, EntitySize, IgnMap,
         ImmuneStatus, Name, PacketState, Pitch, Player, Position, StreamLookup, Uuid, Velocity, Xp,
         Yaw,
         animation::ActiveAnimation,
-        blocks::Blocks,
         metadata::{MetadataPrefabs, entity::Pose},
         skin::PlayerSkin,
     },
@@ -315,7 +313,6 @@ impl Module for IngressModule {
             "recv_data",
             world,
             &Compose($),
-            &Blocks($),
             &AsyncRuntime($),
             &Comms($),
             &SkinHandler($),
@@ -339,7 +336,6 @@ impl Module for IngressModule {
                   row,
                   (
                 compose,
-                blocks,
                 tasks,
                 comms,
                 skins_collection,

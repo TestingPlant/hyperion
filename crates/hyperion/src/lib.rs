@@ -48,7 +48,7 @@ use ingress::IngressModule;
 #[cfg(unix)]
 use libc::{RLIMIT_NOFILE, getrlimit, setrlimit};
 use libdeflater::CompressionLvl;
-use simulation::{Comms, SimModule, StreamLookup, blocks::Blocks};
+use simulation::{Comms, SimModule, StreamLookup};
 use storage::{LocalDb, SkinHandler, ThreadLocal};
 use tracing::{info, info_span, warn};
 use util::mojang::MojangClient;
@@ -87,7 +87,6 @@ pub mod egress;
 pub mod ingress;
 pub mod net;
 pub mod simulation;
-pub mod spatial;
 pub mod storage;
 
 /// Relationship for previous values
@@ -265,7 +264,6 @@ impl HyperionCore {
         world.component::<EgressComm>();
 
         world.component::<AsyncRuntime>();
-        world.component::<Blocks>();
 
         world.component::<Tasks>();
 
@@ -385,7 +383,6 @@ impl HyperionCore {
             });
 
         world.set(IgnMap::default());
-        world.set(Blocks::empty(world));
 
         Ok(())
     }

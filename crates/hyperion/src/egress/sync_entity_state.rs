@@ -15,12 +15,10 @@ use crate::{
     simulation::{
         Flight, MovementTracking, Owner, PendingTeleportation, Pitch, Position, Velocity, Xp, Yaw,
         animation::ActiveAnimation,
-        blocks::Blocks,
         entity_kind::EntityKind,
         event::{self, HitGroundEvent},
         metadata::{MetadataChanges, get_and_clear_metadata},
     },
-    spatial::get_first_collision,
 };
 
 #[derive(Component)]

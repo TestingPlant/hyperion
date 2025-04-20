@@ -3,7 +3,7 @@ use tracing::{error, info_span};
 
 use crate::{
     net::Compose,
-    simulation::{PacketState, blocks::Blocks},
+    simulation::PacketState,
 };
 
 #[derive(Component)]
@@ -35,17 +35,5 @@ impl Module for StatsModule {
 
                 *global.player_count.get_mut() = player_count;
             });
-
-        system!(
-            "load_pending",
-            world,
-            &mut Blocks($),
-        )
-        .kind::<flecs::pipeline::OnUpdate>()
-        .each_iter(|_iter, _, blocks| {
-            let span = info_span!("load_pending");
-            let _enter = span.enter();
-            blocks.load_pending();
-        });
     }
 }

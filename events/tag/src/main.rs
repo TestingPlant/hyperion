@@ -9,7 +9,7 @@ use flecs_ecs::prelude::*;
 use hyperion::{GameServerEndpoint, HyperionCore, simulation::Player};
 
 use derive_more::{Deref, DerefMut};
-use hyperion::{glam::IVec3, simulation::Position, spatial};
+use hyperion::{glam::IVec3, simulation::Position};
 
 use clap::Parser;
 use serde::Deserialize;

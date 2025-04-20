@@ -2805,7 +2805,6 @@ dependencies = [
  "heed",
  "humantime",
  "hyperion-genmap",
- "hyperion-palette",
  "hyperion-proto",
  "hyperion-text",
  "hyperion-utils",

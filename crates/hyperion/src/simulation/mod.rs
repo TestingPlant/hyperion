@@ -32,7 +32,6 @@ use crate::{
 };
 
 pub mod animation;
-pub mod blocks;
 pub mod command;
 pub mod entity_kind;
 pub mod event;
