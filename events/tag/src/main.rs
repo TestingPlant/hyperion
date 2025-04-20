@@ -1,8 +1,22 @@
-use std::net::SocketAddr;
+#![feature(allocator_api)]
+#![feature(let_chains)]
+#![feature(stmt_expr_attributes)]
+#![feature(exact_size_is_empty)]
+
+use std::{collections::HashSet, net::SocketAddr};
+
+use flecs_ecs::prelude::*;
+use hyperion::{GameServerEndpoint, HyperionCore, simulation::Player};
+use hyperion_clap::hyperion_command::CommandRegistry;
+use hyperion_gui::Gui;
+
+use derive_more::{Deref, DerefMut};
+use hyperion::{glam::IVec3, simulation::Position, spatial};
+use hyperion_rank_tree::Team;
+use spatial::SpatialIndex;
 
 use clap::Parser;
 use serde::Deserialize;
-use tag::init_game;
 use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt};
 // use tracing_tracy::TracyLayer;
 
@@ -71,5 +85,17 @@ fn main() {
     let address = format!("{ip}:{port}", ip = args.ip, port = args.port);
     let address = address.parse::<SocketAddr>().unwrap();
 
-    init_game(address).unwrap();
+    let world = World::new();
+
+    world.import::<HyperionCore>();
+
+    world.set(GameServerEndpoint::from(address));
+
+    let mut app = world.app();
+
+    app.enable_rest(0)
+        .enable_stats(true)
+        .set_threads(i32::try_from(rayon::current_num_threads()).unwrap());
+
+    app.run();
 }
