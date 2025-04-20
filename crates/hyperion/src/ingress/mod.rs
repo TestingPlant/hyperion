@@ -255,7 +255,6 @@ impl Module for IngressModule {
                 let view = world
                     .entity()
                     .set(ConnectionId::new(connect))
-                    .set(hyperion_inventory::PlayerInventory::default())
                     .set(ConfirmBlockSequences::default())
                     .set(PacketState::Handshake)
                     .set(ActiveAnimation::NONE)
@@ -330,7 +329,6 @@ impl Module for IngressModule {
             &mut Yaw,
             &mut Pitch,
             &mut ConfirmBlockSequences,
-            &mut hyperion_inventory::PlayerInventory,
             &mut ActiveAnimation,
             &IgnMap($),
         )
@@ -355,7 +353,6 @@ impl Module for IngressModule {
                 yaw,
                 pitch,
                 confirm_block_sequences,
-                inventory,
                 animation,
                 ign_map,
             )| {

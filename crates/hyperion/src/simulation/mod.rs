@@ -36,7 +36,6 @@ pub mod blocks;
 pub mod command;
 pub mod entity_kind;
 pub mod event;
-pub mod inventory;
 pub mod metadata;
 pub mod skin;
 pub mod util;
@@ -700,13 +699,6 @@ impl Module for SimModule {
         world.component::<ChunkPosition>().meta();
         world.component::<ConfirmBlockSequences>();
         world.component::<animation::ActiveAnimation>();
-
-        world.component::<hyperion_inventory::PlayerInventory>();
-        world.component::<hyperion_inventory::CursorItem>();
-
-        world
-            .component::<Player>()
-            .add_trait::<(flecs::With, hyperion_inventory::CursorItem)>();
 
         observer!(
             world,
