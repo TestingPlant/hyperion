@@ -3,7 +3,6 @@ use std::{borrow::Cow, collections::BTreeSet, ops::Index};
 use anyhow::Context;
 use flecs_ecs::prelude::*;
 use glam::DVec3;
-use hyperion_crafting::{Action, CraftingRegistry, RecipeBookState};
 use hyperion_utils::EntityExt;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{info, instrument};
@@ -48,66 +47,6 @@ fn send_sync_tags(encoder: &mut PacketEncoder) -> anyhow::Result<()> {
     let groups = serde_json::from_slice(bytes)?;
 
     let pkt = play::SynchronizeTagsS2c { groups };
-
-    encoder.append_packet(&pkt)?;
-
-    Ok(())
-}
-
-#[expect(
-    clippy::unwrap_used,
-    reason = "this is only called once on startup; it should be fine. we mostly care about \
-              crashing during server execution"
-)]
-fn generate_cached_packet_bytes(
-    encoder: &mut PacketEncoder,
-    crafting_registry: &CraftingRegistry,
-) -> anyhow::Result<()> {
-    send_sync_tags(encoder)?;
-
-    let mut buf: heapless::Vec<u8, 32> = heapless::Vec::new();
-    let brand = b"discord: andrewgazelka";
-    let brand_len = u8::try_from(brand.len()).context("brand length too long to fit in u8")?;
-    buf.push(brand_len).unwrap();
-    buf.extend_from_slice(brand).unwrap();
-
-    let bytes = RawBytes::from(buf.as_slice());
-
-    let brand = play::CustomPayloadS2c {
-        channel: ident!("minecraft:brand").into(),
-        data: bytes.into(),
-    };
-
-    encoder.append_packet(&brand)?;
-
-    encoder.append_packet(&play::TeamS2c {
-        team_name: "no_tag",
-        mode: Mode::CreateTeam {
-            team_display_name: Cow::default(),
-            friendly_flags: TeamFlags::default(),
-            name_tag_visibility: NameTagVisibility::Never,
-            collision_rule: CollisionRule::Always,
-            team_color: TeamColor::Black,
-            team_prefix: Cow::default(),
-            team_suffix: Cow::default(),
-            entities: vec![],
-        },
-    })?;
-
-    if let Some(pkt) = crafting_registry.packet() {
-        encoder.append_packet(&pkt)?;
-    }
-
-    // unlock
-    let pkt = hyperion_crafting::UnlockRecipesS2c {
-        action: Action::Init,
-        crafting_recipe_book: RecipeBookState::FALSE,
-        smelting_recipe_book: RecipeBookState::FALSE,
-        blast_furnace_recipe_book: RecipeBookState::FALSE,
-        smoker_recipe_book: RecipeBookState::FALSE,
-        recipe_ids_1: vec!["hyperion:what".to_string()],
-        recipe_ids_2: vec!["hyperion:what".to_string()],
-    };
 
     encoder.append_packet(&pkt)?;
 

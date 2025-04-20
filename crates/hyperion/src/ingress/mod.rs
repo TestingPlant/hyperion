@@ -333,7 +333,6 @@ impl Module for IngressModule {
             &mut ConfirmBlockSequences,
             &mut hyperion_inventory::PlayerInventory,
             &mut ActiveAnimation,
-            &hyperion_crafting::CraftingRegistry($),
             &IgnMap($),
         )
         .kind::<flecs::pipeline::OnUpdate>()
@@ -360,7 +359,6 @@ impl Module for IngressModule {
                 confirm_block_sequences,
                 inventory,
                 animation,
-                crafting_registry,
                 ign_map,
             )| {
                 let system = it.system();

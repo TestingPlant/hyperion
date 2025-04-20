@@ -72,7 +72,6 @@ use crate::{
 
 mod common;
 pub use common::*;
-use hyperion_crafting::CraftingRegistry;
 use system_order::SystemOrderModule;
 pub use valence_ident;
 
@@ -258,7 +257,6 @@ impl HyperionCore {
         world.component::<ConnectionId>();
         world.component::<ReceiveState>();
         world.component::<Compose>();
-        world.component::<CraftingRegistry>();
 
         world.component::<LocalDb>();
         world.component::<SkinHandler>();
@@ -354,8 +352,6 @@ impl HyperionCore {
             global,
             IoBuf::default(),
         ));
-
-        world.set(CraftingRegistry::default());
 
         world.set(Comms::default());
 
