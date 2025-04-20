@@ -130,11 +130,6 @@ use crate::simulation::metadata::r#type::MetadataType;
 /// Tracks updates within a gametick for the metadata
 pub struct MetadataChanges(Vec<u8>);
 
-unsafe impl Send for MetadataChanges {}
-
-// technically not Sync but I mean do we really care? todo: Indra
-unsafe impl Sync for MetadataChanges {}
-
 mod status;
 
 mod r#type;
