@@ -21,7 +21,6 @@ use crate::{
         metadata::{MetadataChanges, get_and_clear_metadata},
     },
     spatial::get_first_collision,
-    storage::Events,
 };
 
 #[derive(Component)]

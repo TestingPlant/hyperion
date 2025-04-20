@@ -2804,8 +2804,6 @@ dependencies = [
  "heapless",
  "heed",
  "humantime",
- "hyperion-crafting",
- "hyperion-event-macros",
  "hyperion-genmap",
  "hyperion-inventory",
  "hyperion-nerd-font",

@@ -32,7 +32,7 @@ use crate::{
         metadata::{MetadataPrefabs, entity::Pose},
         skin::PlayerSkin,
     },
-    storage::{Events, PlayerJoinServer, SkinHandler},
+    storage::{PlayerJoinServer, SkinHandler},
     util::{TracingExt, mojang::MojangClient},
 };
 
@@ -325,7 +325,6 @@ impl Module for IngressModule {
             &mut PacketState,
             &ConnectionId,
             ?&mut Pose,
-            &Events($),
             &EntitySize,
             ?&mut Position,
             &mut Yaw,
@@ -351,7 +350,6 @@ impl Module for IngressModule {
                 login_state,
                 &io_ref,
                 mut pose,
-                event_queue,
                 size,
                 mut position,
                 yaw,

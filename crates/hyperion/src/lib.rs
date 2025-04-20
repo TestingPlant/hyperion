@@ -49,7 +49,7 @@ use ingress::IngressModule;
 use libc::{RLIMIT_NOFILE, getrlimit, setrlimit};
 use libdeflater::CompressionLvl;
 use simulation::{Comms, SimModule, StreamLookup, blocks::Blocks};
-use storage::{Events, LocalDb, SkinHandler, ThreadLocal};
+use storage::{LocalDb, SkinHandler, ThreadLocal};
 use tracing::{info, info_span, warn};
 use util::mojang::MojangClient;
 pub use uuid;
@@ -261,7 +261,6 @@ impl HyperionCore {
         world.component::<LocalDb>();
         world.component::<SkinHandler>();
         world.component::<MojangClient>();
-        world.component::<Events>();
         world.component::<Comms>();
         world.component::<EgressComm>();
 
@@ -354,9 +353,6 @@ impl HyperionCore {
         ));
 
         world.set(Comms::default());
-
-        let events = Events::initialize(world);
-        world.set(events);
 
         world.set(runtime);
         world.set(StreamLookup::default());
