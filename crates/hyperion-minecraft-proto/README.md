@@ -1,1 +1,0 @@
-# hyperion-minecraft-proto

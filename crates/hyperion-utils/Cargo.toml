@@ -4,7 +4,6 @@ anyhow = {workspace = true}
 directories = {workspace = true}
 sha2 = {workspace = true}
 hex = {workspace = true}
-hyperion-packet-macros = {workspace = true}
 tracing = {workspace = true}
 reqwest = {workspace = true}
 flate2 = {workspace = true}

@@ -3,16 +3,6 @@
 version = 4
 
 [[package]]
-name = "Inflector"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
-dependencies = [
- "lazy_static",
- "regex",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1231,15 +1221,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
-name = "convert_case"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1463,18 +1444,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
 dependencies = [
  "powerfmt",
-]
-
-[[package]]
-name = "derive-build"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a4711aec01a4552d938112abeb89f2ad2d00bde527bfd48d3ae3b376c595ca"
-dependencies = [
- "Inflector",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2804,7 +2773,6 @@ dependencies = [
  "heapless",
  "heed",
  "humantime",
- "hyperion-genmap",
  "hyperion-proto",
  "hyperion-utils",
  "indexmap",
@@ -2848,150 +2816,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyperion-clap"
-version = "0.1.0"
-dependencies = [
- "clap",
- "flecs_ecs",
- "hyperion",
- "hyperion-clap-macros",
- "hyperion-command",
- "hyperion-permission",
- "tracing",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-clap-macros"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn",
-]
-
-[[package]]
-name = "hyperion-command"
-version = "0.1.0"
-dependencies = [
- "flecs_ecs",
- "hyperion",
- "hyperion-utils",
- "indexmap",
- "tracing",
-]
-
-[[package]]
-name = "hyperion-crafting"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "derive-build",
- "flecs_ecs",
- "slotmap",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-event-macros"
-version = "0.1.0"
-dependencies = [
- "convert_case",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "hyperion-genmap"
-version = "0.1.0"
-dependencies = [
- "flecs_ecs",
- "hyperion",
- "hyperion-utils",
-]
-
-[[package]]
-name = "hyperion-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flecs_ecs",
- "hyperion",
- "hyperion-inventory",
- "hyperion-utils",
- "serde",
- "tracing",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-inventory"
-version = "0.1.0"
-dependencies = [
- "derive_more 2.0.1",
- "flecs_ecs",
- "hyperion-crafting",
- "roaring",
- "snafu",
- "tracing",
- "valence_generated",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-item"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "derive_more 2.0.1",
- "flecs_ecs",
- "hyperion",
- "hyperion-inventory",
- "hyperion-utils",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-minecraft-proto"
-version = "0.1.0"
-
-[[package]]
-name = "hyperion-nerd-font"
-version = "0.1.0"
-
-[[package]]
-name = "hyperion-packet-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "syn",
-]
-
-[[package]]
-name = "hyperion-palette"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "roaring",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-permission"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "flecs_ecs",
- "heed",
- "hyperion",
- "num-derive",
- "num-traits",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "hyperion-proto"
 version = "0.1.0"
 dependencies = [
@@ -3028,51 +2852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyperion-rank-tree"
-version = "0.1.0"
-dependencies = [
- "clap",
- "flecs_ecs",
- "hyperion",
- "hyperion-inventory",
- "hyperion-item",
- "tracing",
- "valence_protocol",
-]
-
-[[package]]
-name = "hyperion-respawn"
-version = "0.1.0"
-dependencies = [
- "hyperion",
- "hyperion-utils",
-]
-
-[[package]]
-name = "hyperion-scheduled"
-version = "0.1.0"
-
-[[package]]
-name = "hyperion-stats"
-version = "0.1.0"
-dependencies = [
- "approx",
- "divan",
- "rand 0.9.0",
-]
-
-[[package]]
-name = "hyperion-text"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.12",
- "uuid",
- "valence_protocol",
-]
-
-[[package]]
 name = "hyperion-utils"
 version = "0.1.0"
 dependencies = [
@@ -3082,7 +2861,6 @@ dependencies = [
  "flecs_ecs",
  "futures-util",
  "hex",
- "hyperion-packet-macros",
  "reqwest",
  "sha2",
  "tar",
@@ -3863,17 +3641,6 @@ name = "num-conv"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
-
-[[package]]
-name = "num-derive"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "num-integer"
@@ -5565,27 +5332,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "snafu"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "223891c85e2a29c3fe8fb900c1fae5e69c2e42415e3177752e8718475efa5019"
-dependencies = [
- "snafu-derive",
-]
-
-[[package]]
-name = "snafu-derive"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

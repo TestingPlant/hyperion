@@ -18,26 +18,8 @@ members = [
     'crates/bvh-region',
     'crates/geometry',
     'crates/hyperion',
-    'crates/hyperion-clap',
-    'crates/hyperion-command',
-    'crates/hyperion-crafting',
-    'crates/hyperion-event-macros',
-    'crates/hyperion-genmap',
-    'crates/hyperion-gui',
-    'crates/hyperion-inventory',
-    'crates/hyperion-item',
-    'crates/hyperion-minecraft-proto',
-    'crates/hyperion-nerd-font',
-    'crates/hyperion-packet-macros',
-    'crates/hyperion-palette',
-    'crates/hyperion-permission',
     'crates/hyperion-proto',
     'crates/hyperion-proxy',
-    'crates/hyperion-rank-tree',
-    'crates/hyperion-respawn',
-    'crates/hyperion-scheduled',
-    'crates/hyperion-stats',
-    'crates/hyperion-text',
     'crates/hyperion-utils',
     'crates/simd-utils',
     'crates/system-order',
@@ -149,56 +131,8 @@ path = 'crates/geometry'
 [workspace.dependencies.hyperion]
 path = 'crates/hyperion'
 
-[workspace.dependencies.hyperion-clap]
-path = 'crates/hyperion-clap'
-
-[workspace.dependencies.hyperion-clap-macros]
-path = 'crates/hyperion-clap-macros'
-
-[workspace.dependencies.hyperion-command]
-path = 'crates/hyperion-command'
-
-[workspace.dependencies.hyperion-crafting]
-path = 'crates/hyperion-crafting'
-
-[workspace.dependencies.hyperion-event-macros]
-path = 'crates/hyperion-event-macros'
-
-[workspace.dependencies.hyperion-genmap]
-path = 'crates/hyperion-genmap'
-
-[workspace.dependencies.hyperion-gui]
-path = 'crates/hyperion-gui'
-
-[workspace.dependencies.hyperion-inventory]
-path = 'crates/hyperion-inventory'
-
-[workspace.dependencies.hyperion-item]
-path = 'crates/hyperion-item'
-
-[workspace.dependencies.hyperion-nerd-font]
-path = 'crates/hyperion-nerd-font'
-
-[workspace.dependencies.hyperion-packet-macros]
-path = 'crates/hyperion-packet-macros'
-
-[workspace.dependencies.hyperion-palette]
-path = 'crates/hyperion-palette'
-
-[workspace.dependencies.hyperion-permission]
-path = 'crates/hyperion-permission'
-
 [workspace.dependencies.hyperion-proto]
 path = 'crates/hyperion-proto'
-
-[workspace.dependencies.hyperion-rank-tree]
-path = 'crates/hyperion-rank-tree'
-
-[workspace.dependencies.hyperion-scheduled]
-path = 'crates/hyperion-scheduled'
-
-[workspace.dependencies.hyperion-text]
-path = 'crates/hyperion-text'
 
 [workspace.dependencies.hyperion-utils]
 path = 'crates/hyperion-utils'

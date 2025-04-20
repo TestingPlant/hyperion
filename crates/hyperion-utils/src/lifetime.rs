@@ -57,18 +57,6 @@ where
     type WithLifetime<'a> = &'a T;
 }
 
-hyperion_packet_macros::for_each_static_play_c2s_packet! {
-    unsafe impl Lifetime for PACKET {
-        type WithLifetime<'a> = PACKET;
-    }
-}
-
-hyperion_packet_macros::for_each_lifetime_play_c2s_packet! {
-    unsafe impl Lifetime for PACKET<'_> {
-        type WithLifetime<'a> = PACKET<'a>;
-    }
-}
-
 pub struct RuntimeLifetime<T> {
     value: T,
     references: *const AtomicUsize,

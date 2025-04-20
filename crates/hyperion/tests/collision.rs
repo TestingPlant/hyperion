@@ -30,7 +30,6 @@ fn test_get_first_collision() {
     world.import::<HyperionCore>();
     world.import::<SpatialModule>();
     world.import::<hyperion_utils::HyperionUtilsModule>();
-    world.import::<hyperion_genmap::GenMapModule>();
 
     // Make all entities have Spatial component so they are spatially indexed
     world
