@@ -33,7 +33,6 @@ use crate::{
 pub mod animation;
 pub mod command;
 pub mod entity_kind;
-pub mod event;
 pub mod metadata;
 pub mod skin;
 pub mod util;

@@ -16,7 +16,6 @@ use crate::{
         Flight, MovementTracking, Owner, PendingTeleportation, Pitch, Position, Velocity, Xp, Yaw,
         animation::ActiveAnimation,
         entity_kind::EntityKind,
-        event::{self, HitGroundEvent},
         metadata::{MetadataChanges, get_and_clear_metadata},
     },
 };
