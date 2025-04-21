@@ -21,15 +21,8 @@ use crate::{
         Compose, ConnectionId, MINECRAFT_VERSION, PROTOCOL_VERSION, PacketDecoder,
         decoder::BorrowedPacketFrame, proxy::ReceiveState,
     },
+    simulation::{StreamLookup, PacketState, Player, Name},
     runtime::AsyncRuntime,
-    simulation::{
-        AiTargetable, Comms, ConfirmBlockSequences, EntitySize, IgnMap,
-        ImmuneStatus, Name, PacketState, Pitch, Player, Position, StreamLookup, Uuid, Velocity, Xp,
-        Yaw,
-        animation::ActiveAnimation,
-        metadata::{MetadataPrefabs, entity::Pose},
-        skin::PlayerSkin,
-    },
     util::{TracingExt, mojang::MojangClient},
 };
 
@@ -66,19 +59,6 @@ impl Module for IngressModule {
                 world.quit();
             }
         });
-
-        system!(
-            "update_ign_map",
-            world,
-            &mut IgnMap($),
-        )
-        .kind::<flecs::pipeline::OnLoad>()
-        .each_iter(|_, _, ign_map| {
-            let span = info_span!("update_ign_map");
-            let _enter = span.enter();
-            ign_map.update();
-        });
-
         system!(
             "generate_ingress_events",
             world,
@@ -104,11 +84,7 @@ impl Module for IngressModule {
                 info!("player_connect");
                 let view = world
                     .entity()
-                    .set(ConnectionId::new(connect))
-                    .set(ConfirmBlockSequences::default())
                     .set(PacketState::Handshake)
-                    .set(ActiveAnimation::NONE)
-                    .set(PacketDecoder::default())
                     .add::<Player>();
 
                 lookup.insert(connect, view.id());
@@ -156,50 +132,22 @@ impl Module for IngressModule {
         system!(
             "recv_data",
             world,
-            &Compose($),
-            &AsyncRuntime($),
-            &Comms($),
-            &MojangClient($),
-            &mut PacketDecoder,
             &mut PacketState,
-            &ConnectionId,
-            ?&mut Pose,
-            &EntitySize,
-            ?&mut Position,
-            &mut Yaw,
-            &mut Pitch,
-            &mut ConfirmBlockSequences,
-            &mut ActiveAnimation,
-            &IgnMap($),
         )
         .kind::<flecs::pipeline::OnUpdate>()
         .multi_threaded()
         .each_iter(
             move |it,
                   row,
-                  (
-                compose,
-                tasks,
-                comms,
-                mojang,
-                decoder,
-                login_state,
-                &io_ref,
-                mut pose,
-                size,
-                mut position,
-                yaw,
-                pitch,
-                confirm_block_sequences,
-                animation,
-                ign_map,
-            )| {
+                  
+                login_state
+            | {
                 let system = it.system();
                 let world = it.world();
                 let entity = it.entity(row);
 
                 if *login_state == PacketState::Handshake {
-                    entity.set(Name::from(Arc::from("name")));
+                    entity.set(Name(5));
                     *login_state = PacketState::Login;
                 }
             },

@@ -104,9 +104,14 @@ impl<K: Eq + Hash, V> DeferredMap<K, V> {
 
 /// The in-game name of a player.
 /// todo: fix the meta
-#[derive(Component, Deref, From, Display, Debug)]
-#[meta]
-pub struct Name(Arc<str>);
+#[derive(Component)]
+pub struct Name(pub u8);
+
+impl Drop for Name {
+    fn drop(&mut self) {
+        std::process::exit(1);
+    }
+}
 
 #[derive(Component, Deref, DerefMut, From, Debug, Default)]
 pub struct IgnMap(DeferredMap<Arc<str>, Entity>);
@@ -666,7 +671,7 @@ impl Module for SimModule {
         world.component::<Position>().meta();
 
         world.component::<Name>();
-        component!(world, Name).opaque_func(meta_ser_stringify_type_display::<Name>);
+        component!(world, Name);
 
         world.component::<AiTargetable>();
         world.component::<ImmuneStatus>().meta();
