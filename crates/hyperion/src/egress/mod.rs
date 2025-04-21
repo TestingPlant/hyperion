@@ -5,16 +5,13 @@ use rkyv::util::AlignedVec;
 use tracing::{error, info_span};
 use valence_protocol::{VarInt, packets::play};
 
-use crate::{net::Compose, simulation::EgressComm};
+use crate::net::Compose;
 
 pub mod metadata;
 pub mod player_join;
 mod stats;
-mod sync_entity_state;
 
 use player_join::PlayerJoinModule;
-use stats::StatsModule;
-use sync_entity_state::EntityStateSyncModule;
 
 use crate::{
     net::ConnectionId,
@@ -46,9 +43,7 @@ impl Module for EgressModule {
             .add::<flecs::pipeline::Phase>()
             .depends_on::<flecs::pipeline::OnStore>();
 
-        world.import::<StatsModule>();
         world.import::<PlayerJoinModule>();
-        world.import::<EntityStateSyncModule>();
 
         system!(
             "clear_bump",

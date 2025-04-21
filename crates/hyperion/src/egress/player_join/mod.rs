@@ -83,13 +83,5 @@ pub struct PlayerJoinModule;
 
 impl Module for PlayerJoinModule {
     fn module(world: &World) {
-        let root_command = world.entity().set(Command::ROOT);
-
-        #[expect(
-            clippy::unwrap_used,
-            reason = "this is only called once on startup. We mostly care about crashing during \
-                      server execution"
-        )]
-        ROOT_COMMAND.set(root_command.id()).unwrap();
     }
 }
