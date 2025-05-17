@@ -528,16 +528,10 @@ fn click_slot(
 }
 
 fn chat_message<'a>(
-    pkt: &play::ChatMessageC2s<'a>,
-    handle: &dyn LifetimeHandle<'a>,
-    query: &mut PacketSwitchQuery<'_>,
+    _pkt: &play::ChatMessageC2s<'a>,
+    _handle: &dyn LifetimeHandle<'a>,
+    _query: &mut PacketSwitchQuery<'_>,
 ) -> anyhow::Result<()> {
-    let msg = RuntimeLifetime::new(pkt.message.0, handle);
-
-    query
-        .events
-        .push(event::ChatMessage { msg, by: query.id }, query.world);
-
     Ok(())
 }
 
