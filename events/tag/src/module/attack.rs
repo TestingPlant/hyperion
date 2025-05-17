@@ -105,6 +105,7 @@ impl Module for AttackModule {
         )
         .with_enum(PacketState::Play)
         .kind(id::<flecs::pipeline::OnUpdate>())
+        .multi_threaded()
         .each_iter(move |it, _, (compose, kill_count, stream)| {
             const MAX_KILLS: usize = 10;
 
@@ -131,7 +132,7 @@ impl Module for AttackModule {
 
         // TODO: This code should be split between melee attacks and bow attacks
         system!("handle_attacks", world, &mut EventQueue<event::AttackEntity>($), &Compose($))
-
+            .multi_threaded()
             .each_iter(
             move |it: TableIter<'_, false>,
                 _,

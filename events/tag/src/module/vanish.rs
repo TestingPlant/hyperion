@@ -37,6 +37,7 @@ impl Module for VanishModule {
             &Uuid,
         )
         .kind(id::<flecs::pipeline::PreStore>())
+        .multi_threaded()
         .each_iter(move |it, row, (compose, _connection_id, vanished, uuid)| {
             let entity = it.entity(row).expect("row must be in bounds");
             let system = it.system();

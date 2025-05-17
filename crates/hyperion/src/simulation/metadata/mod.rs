@@ -48,6 +48,7 @@ where
             &mut MetadataChanges, //     (2)
         )>(system_name)
         .kind(id::<flecs::pipeline::OnUpdate>())
+        .multi_threaded()
         .each(|(prev, current, metadata_changes)| {
             if prev != current {
                 metadata_changes.encode(*current);

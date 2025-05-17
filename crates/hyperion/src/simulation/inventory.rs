@@ -126,6 +126,7 @@ impl Module for InventoryModule {
             &ConnectionId,
         )
             .kind(id::<flecs_ecs::prelude::flecs::pipeline::OnStore>())
+            .multi_threaded()
             .each_iter(
                 |
                     it,

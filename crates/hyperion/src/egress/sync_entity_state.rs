@@ -54,6 +54,7 @@ fn track_previous<T: ComponentId + Copy + Debug + PartialEq>(world: &World) {
     world
         .system_named::<(&mut (Prev, T), &T)>(system_name.as_str())
         .kind(post_store)
+        .multi_threaded()
         .each(|(prev, value)| {
             *prev = *value;
         });
@@ -71,6 +72,7 @@ impl Module for EntityStateSyncModule {
             .term_at(0u32)
             .singleton()
             .kind(id::<flecs::pipeline::OnStore>())
+            .multi_threaded()
             .each_iter(|table, idx, (compose, net, prev_xp, current)| {
                 const {
                     assert!(size_of::<Xp>() == size_of::<u16>());
@@ -98,6 +100,7 @@ impl Module for EntityStateSyncModule {
 
         system!("entity_metadata_sync", world, &Compose($), &mut MetadataChanges)
             .kind(id::<flecs::pipeline::OnStore>())
+            .multi_threaded()
             .each_iter(move |it, row, (compose, metadata_changes)| {
                 let system = it.system();
                 let entity = it.entity(row).expect("row must be in bounds");
@@ -133,6 +136,7 @@ impl Module for EntityStateSyncModule {
         &mut ActiveAnimation,
         )
         .kind(id::<flecs::pipeline::OnStore>())
+        .multi_threaded()
         .each_iter(
             move |it, row, (position, compose, connection_id, animation)| {
                 let io = connection_id.copied();
@@ -174,6 +178,7 @@ impl Module for EntityStateSyncModule {
             &Flight,
         )
         .kind(id::<flecs::pipeline::PreStore>())
+        .multi_threaded()
         .each_iter(
             |it,
              row,
@@ -364,6 +369,7 @@ impl Module for EntityStateSyncModule {
             ?&ConnectionId
         )
         .kind(id::<flecs::pipeline::OnUpdate>())
+        .multi_threaded()
         .with_enum_wildcard::<EntityKind>()
         .each_iter(|it, row, (position, velocity, owner, connection_id)| {
             if let Some(_connection_id) = connection_id {
