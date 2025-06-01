@@ -43,48 +43,7 @@ impl Module for ChatModule {
 
                 let current_tick = compose.global().tick;
 
-                for event::ChatMessage { msg, by } in event_queue.drain() {
-                    let by = world.entity_from_id(by);
-
-                    // todo: we should not need this; death should occur such that this is always valid
-                    if !by.is_alive() {
-                        continue;
-                    }
-
-                    // Check cooldown
-                    // todo: try_get if entity is dead/not found what will happen?
-                    by.get::<(&Name, &Position, &mut ChatCooldown, &ConnectionId)>(|(name, position, cooldown, io)| {
-                        // Check if player is still on cooldown
-                        if cooldown.expires > current_tick {
-                            let remaining_ticks = cooldown.expires - current_tick;
-                            let remaining_secs = remaining_ticks as f32 / 20.0;
-
-                            let cooldown_msg = format!("§cPlease wait {remaining_secs:.2} seconds before sending another message").into_cow_text();
-
-                            let packet = play::GameMessageS2c {
-                                chat: cooldown_msg,
-                                overlay: false,
-                            };
-
-                            compose.unicast(&packet, *io, system_id, &world).unwrap();
-                            return;
-                        }
-
-                        cooldown.expires = current_tick + CHAT_COOLDOWN_TICKS;
-
-                        let chat = format!("§8<§b{name}§8>§r {msg}").into_cow_text();
-                        let packet = play::GameMessageS2c {
-                            chat,
-                            overlay: false,
-                        };
-
-                        let center = position.to_chunk();
-
-                        compose.broadcast_local(&packet, center, system_id)
-                            .send(&world)
-                            .unwrap();
-                    });
-                }
+                event_queue.drain();
             });
     }
 }
