@@ -75,13 +75,13 @@ fn process_player_join(
             // &EntityFlags,
         ),
     >,
-    commands: ParallelCommands<'_, '_>,
+    mut commands: Commands<'_, '_>,
 ) {
     static CACHED_DATA: once_cell::sync::OnceCell<bytes::Bytes> = once_cell::sync::OnceCell::new();
 
     let crafting_registry = &crafting_registry;
 
-    events.par_read().for_each(|event| {
+    events.read().for_each(|event| {
         let mut bundle = DataBundle::new(&compose);
 
         let entity_id = event.0;
@@ -335,21 +335,19 @@ fn process_player_join(
         bundle.unicast(connection_id).unwrap();
 
         let position = **position;
-        commands.command_scope(move |mut commands| {
-            commands.entity(entity_id).insert((
-                MovementTracking {
-                    received_movement_packets: 0,
-                    last_tick_flying: false,
-                    last_tick_position: position,
-                    fall_start_y: position.y,
-                    server_velocity: DVec3::ZERO,
-                    sprinting: false,
-                    was_on_ground: false,
-                },
-                PendingTeleportation::new(position),
-                packet_state::Play(()),
-            ));
-        });
+        commands.entity(entity_id).insert((
+            MovementTracking {
+                received_movement_packets: 0,
+                last_tick_flying: false,
+                last_tick_position: position,
+                fall_start_y: position.y,
+                server_velocity: DVec3::ZERO,
+                sprinting: false,
+                was_on_ground: false,
+            },
+            PendingTeleportation::new(position),
+            packet_state::Play(()),
+        ));
 
         info!("{name} joined the world");
     });
