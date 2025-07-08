@@ -4,7 +4,7 @@ use clap::Parser;
 use serde::Deserialize;
 use tag::init_game;
 use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt};
-// use tracing_tracy::TracyLayer;
+use tracing_tracy::TracyLayer;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -36,7 +36,7 @@ fn setup_logging() {
     tracing::subscriber::set_global_default(
         Registry::default()
             .with(EnvFilter::from_default_env())
-            // .with(TracyLayer::default())
+            .with(TracyLayer::default())
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(false)

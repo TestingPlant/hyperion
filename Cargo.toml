@@ -129,7 +129,7 @@ path = 'crates/bvh-region'
 
 [workspace.dependencies.bevy]
 default-features = false
-features = ['multi_threaded']
+features = ['multi_threaded', 'trace_tracy']
 version = "0.16.1"
 
 [workspace.dependencies.bytemuck]
