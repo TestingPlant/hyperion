@@ -14,15 +14,15 @@ use hyperion_proto::{
     PlayerConnect, PlayerDisconnect, PlayerDisconnectReason, PlayerPackets, ProxyToServerMessage,
 };
 use rkyv::ser::allocator::Arena;
-use rustc_hash::FxBuildHasher;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite},
     task::JoinHandle,
 };
-use tracing::{info, info_span, instrument, warn};
+use tracing::{info, error, info_span, instrument, warn};
 
 use crate::{
-    ShutdownType, data::PlayerHandle, server_sender::ServerSender, util::AsyncWriteVectoredExt,
+    PlayerConnectionMessage,
+    ShutdownType, server_sender::ServerSender, util::AsyncWriteVectoredExt,
 };
 
 /// Default buffer size for reading player packets, set to 8 KiB.
@@ -43,7 +43,7 @@ pub fn initiate_player_connection(
     incoming_packet_receiver: kanal::AsyncReceiver<Bytes>,
     total_bytes_pending_send: Arc<AtomicUsize>,
     server_sender: ServerSender,
-    player_registry: &'static papaya::HashMap<u64, PlayerHandle, FxBuildHasher>,
+    connection_tx: kanal::AsyncSender<PlayerConnectionMessage>,
 ) -> JoinHandle<()> {
     let span = info_span!("player_connection", player_id);
     let _enter = span.enter();
@@ -186,7 +186,8 @@ pub fn initiate_player_connection(
             }
         }
 
-        let map_ref = player_registry.pin();
-        map_ref.remove(&player_id);
+        if let Err(e) = connection_tx.send(PlayerConnectionMessage::RemovePlayer { stream: player_id }).await {
+            error!("failed to send player connection message upon player disconnect: {e:?}");
+        }
     })
 }

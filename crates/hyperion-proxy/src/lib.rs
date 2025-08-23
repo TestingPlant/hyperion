@@ -25,7 +25,6 @@ use std::{
 use anyhow::Context;
 use colored::Colorize;
 use hyperion_proto::ArchivedServerToProxyMessage;
-use rustc_hash::FxBuildHasher;
 use rustls::{RootCertStore, client::ClientConfig};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use tokio::{
@@ -66,6 +65,17 @@ async fn connect(addr: impl ToSocketAddrs + Debug + Clone) -> TcpStream {
 enum ShutdownType {
     Reconnect,
     Full,
+}
+
+#[derive(Debug)]
+enum PlayerConnectionMessage {
+    AddPlayer {
+        stream: u64,
+        handle: PlayerHandle
+    },
+    RemovePlayer {
+        stream: u64,
+    }
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
@@ -189,15 +199,13 @@ async fn connect_to_server_and_run_proxy(
     let (server_read, server_write) = tokio::io::split(server_stream);
     let server_sender = launch_server_writer(server_write);
 
-    let player_registry = papaya::HashMap::default();
-    let player_registry: &'static papaya::HashMap<u64, PlayerHandle, FxBuildHasher> =
-        Box::leak(Box::new(player_registry));
-
-    let egress = Egress::new(player_registry, server_sender.clone());
+    let egress = Egress::new(server_sender.clone());
 
     let egress = BufferedEgress::new(egress);
 
     let mut handler = IngressHandler::new(BufReader::new(server_read), egress);
+
+    let (connection_tx, connection_rx) = kanal::unbounded_async();
 
     tokio::spawn({
         let mut shutdown_rx = shutdown_rx.clone();
@@ -218,7 +226,16 @@ async fn connect_to_server_and_run_proxy(
                                 break;
                             }
                         }
-                    }
+                    },
+                    message = connection_rx.recv() => {
+                        match message {
+                            Ok(message) => handler.handle_player_connection_message(message),
+                            Err(e) => {
+                                error!("Error reading from player connection message channel: {e:?}");
+                                break;
+                            }
+                        }
+                    },
                 }
                 }
 
@@ -244,17 +261,16 @@ async fn connect_to_server_and_run_proxy(
             }
         };
 
-        let registry = player_registry.pin();
         let total_bytes_pending_send = Arc::new(AtomicUsize::new(0));
 
         let (tx, rx) = kanal::unbounded_async();
-        registry.insert(
-            player_id_on,
-            PlayerHandle::new(tx, total_bytes_pending_send.clone()),
-        );
 
         // todo: some SlotMap like thing
         debug!("got player with id {player_id_on:?}");
+
+        if let Err(e) = connection_tx.send(dbg!(PlayerConnectionMessage::AddPlayer { stream: player_id_on, handle: PlayerHandle::new(tx, total_bytes_pending_send.clone()) })).await {
+            anyhow::bail!("failed to send player connection message: {e:?}");
+        }
 
         initiate_player_connection(
             socket,
@@ -263,7 +279,7 @@ async fn connect_to_server_and_run_proxy(
             rx,
             total_bytes_pending_send,
             server_sender.clone(),
-            player_registry,
+            connection_tx.clone(),
         );
 
         player_id_on += 1;
@@ -333,6 +349,21 @@ where
         self.egress.handle_packet(result);
 
         Ok(())
+    }
+
+    fn handle_player_connection_message(&mut self, message: PlayerConnectionMessage) {
+        match dbg!(message) {
+            PlayerConnectionMessage::AddPlayer { stream, handle } => {
+                if self.egress.egress.player_registry.insert(stream, handle).is_some() {
+                    error!("player connection message inserted another player with id {stream:?} but a player with the same id is already connected");
+                }
+            },
+            PlayerConnectionMessage::RemovePlayer { stream } => {
+                if !self.egress.egress.player_registry.remove(&stream).is_some() {
+                    error!("player connection message attempted to remove {stream:?} which does not exist");
+                }
+            },
+        }
     }
 }
 

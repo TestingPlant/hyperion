@@ -66,7 +66,7 @@ pub struct BufferedEgress {
     /// Manages channels
     channel_manager: ChannelManager,
     /// Reference to the underlying egress handler.
-    egress: Egress,
+    pub(crate) egress: Egress,
     player_bvh: Bvh<Vec<u64>>,
 }
 
@@ -139,7 +139,6 @@ impl BufferedEgress {
             }
             ArchivedServerToProxyMessage::UpdateChannelPositions(packet) => {
                 let mut requested_subscriptions = Vec::new();
-                let players = self.egress.player_registry.pin_owned();
 
                 // Update channel positions
                 for update in packet.updates.get() {
@@ -199,7 +198,7 @@ impl BufferedEgress {
 
                         let streams = &streams[start..end];
                         for &stream in streams {
-                            let Some(player) = players.get(&stream) else {
+                            let Some(player) = self.egress.player_registry.get(&stream) else {
                                 error!("bvh contains invalid stream id {stream}");
                                 continue;
                             };
@@ -341,9 +340,7 @@ impl BufferedEgress {
                     Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
                 let Ok(exclude) = rkyv::deserialize::<u64, !>(&packet.exclude);
 
-                let players = self.egress.player_registry.pin_owned();
-
-                for (&stream, player) in &players {
+                for (&stream, player) in &self.egress.player_registry {
                     if !player.can_receive_broadcasts() || stream == exclude {
                         continue;
                     }

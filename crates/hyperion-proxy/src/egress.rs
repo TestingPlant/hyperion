@@ -1,34 +1,30 @@
 use bytes::Bytes;
 use hyperion_proto::{ArchivedSetReceiveBroadcasts, ArchivedShutdown};
-use rustc_hash::FxBuildHasher;
+use rustc_hash::FxHashMap;
 use tracing::{error, instrument, warn};
 
 use crate::{data::PlayerHandle, server_sender::ServerSender};
 
-#[derive(Clone)]
 pub struct Egress {
     // todo: can we do some type of EntityId and SlotMap
-    pub(crate) player_registry: &'static papaya::HashMap<u64, PlayerHandle, FxBuildHasher>,
+    pub(crate) player_registry: FxHashMap<u64, PlayerHandle>,
     pub(crate) server_sender: ServerSender,
 }
 
 impl Egress {
     #[must_use]
-    pub const fn new(
-        player_registry: &'static papaya::HashMap<u64, PlayerHandle, FxBuildHasher>,
+    pub fn new(
         server_sender: ServerSender,
     ) -> Self {
         Self {
-            player_registry,
+            player_registry: FxHashMap::default(),
             server_sender,
         }
     }
 
     #[instrument(skip_all)]
     pub fn unicast(&self, stream: u64, data: Bytes) {
-        let players = self.player_registry.pin();
-
-        let Some(player) = players.get(&stream) else {
+        let Some(player) = self.player_registry.get(&stream) else {
             // expected to still happen infrequently
             warn!("Player not found for id {stream:?}");
             return;
@@ -45,9 +41,7 @@ impl Egress {
     /// `max_total_bytes`, `data` will not be sent. Returns whether the packet was sent.
     #[instrument(skip_all)]
     pub fn maybe_unicast(&self, stream: u64, data: Bytes, max_total_bytes: usize) -> bool {
-        let players = self.player_registry.pin();
-
-        let Some(player) = players.get(&stream) else {
+        let Some(player) = self.player_registry.get(&stream) else {
             // expected to still happen infrequently
             warn!("Player not found for id {stream:?}");
             return false;
@@ -68,11 +62,9 @@ impl Egress {
 
     #[instrument(skip_all)]
     pub fn handle_set_receive_broadcasts(&self, pkt: &ArchivedSetReceiveBroadcasts) {
-        let player_registry = self.player_registry;
-        let players = player_registry.pin();
         let Ok(stream) = rkyv::deserialize::<u64, !>(&pkt.stream);
 
-        let Some(player) = players.get(&stream) else {
+        let Some(player) = self.player_registry.get(&stream) else {
             error!("Player not found for stream {stream:?}");
             return;
         };
@@ -82,11 +74,9 @@ impl Egress {
 
     #[instrument(skip_all)]
     pub fn handle_shutdown(&self, pkt: &ArchivedShutdown) {
-        let player_registry = self.player_registry;
-        let players = player_registry.pin();
         let Ok(stream) = rkyv::deserialize::<u64, !>(&pkt.stream);
 
-        if let Some(result) = players.get(&stream) {
+        if let Some(result) = self.player_registry.get(&stream) {
             result.shutdown();
         } else {
             error!("Player not found for stream {stream:?}");

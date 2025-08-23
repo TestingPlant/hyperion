@@ -2,7 +2,6 @@
 arrayvec = { workspace = true }
 colored = { workspace = true }
 kanal = { workspace = true }
-papaya = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 rustls = { workspace = true }
