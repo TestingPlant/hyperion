@@ -19,6 +19,10 @@ const SUBSCRIBE_RADIUS: i16 = 16;
 /// Minimum chunk distance between a packet's center and a player for a subscribed player to be unsubscribed from a channel.
 const UNSUBSCRIBE_RADIUS: i16 = SUBSCRIBE_RADIUS + 2;
 
+/// If a player's total bytes pending send is greater then this value, it will not receive more
+/// subscribe packets. This is useful for clients with slow network connections.
+const MAX_PENDING_BYTES_FOR_SUBSCRIBE: usize = 16_384;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Player {
     stream: u64,
@@ -313,12 +317,19 @@ impl BufferedEgress {
                     }
 
                     debug!("subscribing player {stream} to channel {channel_id}");
-                    self.egress.unicast(stream, data.clone());
+                    let sent = self.egress.maybe_unicast(stream, data.clone(), MAX_PENDING_BYTES_FOR_SUBSCRIBE);
+
+                    if sent {
+                        channel.subscribed_connections.insert(stream);
+                    }
+
+                    // Note that even if the subscribe packets were not sent and a stream is not
+                    // subscribed, the stream is still removed from pending connections. This
+                    // allows the game server to send new subscribe packets later because the proxy
+                    // will not request subscribe packets if there's already a stream in the
+                    // pending connections list.
                 }
 
-                channel
-                    .subscribed_connections
-                    .extend(channel.pending_connections.iter().copied());
                 channel.pending_connections.clear();
             }
             ArchivedServerToProxyMessage::BroadcastGlobal(packet) => {

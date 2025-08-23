@@ -1,6 +1,6 @@
 //! Player connection handling and packet processing.
 
-use std::io::IoSlice;
+use std::{sync::{Arc, atomic::{self, AtomicUsize}}, io::IoSlice};
 
 use arrayvec::ArrayVec;
 use bytes::Bytes;
@@ -35,6 +35,7 @@ pub fn initiate_player_connection(
     mut shutdown_signal: tokio::sync::watch::Receiver<Option<ShutdownType>>,
     player_id: u64,
     incoming_packet_receiver: kanal::AsyncReceiver<Bytes>,
+    total_bytes_pending_send: Arc<AtomicUsize>,
     server_sender: ServerSender,
     player_registry: &'static papaya::HashMap<u64, PlayerHandle, FxBuildHasher>,
 ) -> JoinHandle<()> {
@@ -120,9 +121,11 @@ pub fn initiate_player_connection(
                 bytes.push(outgoing_packet);
             }
 
-            // Convert the bytes into slices
+            // Convert the bytes into slices and count the total bytes
             let mut slices = ArrayVec::<_, 16>::new();
+            let mut total_bytes = 0;
             for slice in &bytes {
+                total_bytes += slice.len();
                 slices.push(IoSlice::new(slice));
             }
 
@@ -130,6 +133,7 @@ pub fn initiate_player_connection(
                 warn!("Error writing packets to player: {e:?}");
                 return;
             }
+            total_bytes_pending_send.fetch_sub(total_bytes, atomic::Ordering::Relaxed);
         }
     });
 

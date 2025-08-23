@@ -41,6 +41,31 @@ impl Egress {
         }
     }
 
+    /// Unicasts a packet to a stream. If the stream's total bytes pending send is greater than
+    /// `max_total_bytes`, `data` will not be sent. Returns whether the packet was sent.
+    #[instrument(skip_all)]
+    pub fn maybe_unicast(&self, stream: u64, data: Bytes, max_total_bytes: usize) -> bool {
+        let players = self.player_registry.pin();
+
+        let Some(player) = players.get(&stream) else {
+            // expected to still happen infrequently
+            warn!("Player not found for id {stream:?}");
+            return false;
+        };
+
+        if player.total_bytes_pending_send() > max_total_bytes {
+            return false;
+        }
+
+        // todo: handle error; kick player if cannot send (buffer full)
+        if let Err(e) = player.send(data) {
+            warn!("Failed to send data to player: {:?}", e);
+            player.shutdown();
+        }
+
+        true
+    }
+
     #[instrument(skip_all)]
     pub fn handle_set_receive_broadcasts(&self, pkt: &ArchivedSetReceiveBroadcasts) {
         let player_registry = self.player_registry;
