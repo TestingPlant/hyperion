@@ -40,11 +40,6 @@ use crate::{
 /// 4 KiB
 const DEFAULT_BUFFER_SIZE: usize = 4 * 1024;
 
-/// Maximum number of pending messages in a player's communication channel.
-/// If this limit is exceeded, the player will be disconnected to prevent
-/// memory exhaustion from slow or unresponsive clients.
-const MAX_PLAYER_PENDING_MESSAGES: usize = 1_024;
-
 pub mod cache;
 pub mod data;
 pub mod egress;
@@ -247,8 +242,7 @@ async fn connect_to_server_and_run_proxy(
 
         let registry = player_registry.pin();
 
-        // todo: re-add bounding but issues if have MASSIVE number of packets
-        let (tx, rx) = kanal::bounded_async(MAX_PLAYER_PENDING_MESSAGES);
+        let (tx, rx) = kanal::unbounded_async();
         registry.insert(player_id_on, PlayerHandle::new(tx));
 
         // todo: some SlotMap like thing

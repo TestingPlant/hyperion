@@ -200,6 +200,28 @@ impl Blocks {
         self.load_pending();
     }
 
+    pub fn block_and_load_many(
+        &mut self,
+        column_locations: impl Iterator<Item = I16Vec2>,
+        tasks: &AsyncRuntime,
+    ) {
+        tasks.block_on(async {
+            let mut set = tokio::task::JoinSet::new();
+            for column_location in column_locations {
+                set.spawn(self.get_and_wait(column_location));
+            }
+            while let Some(res) = set.join_next().await {
+                match res {
+                    Ok(_) => {}
+                    Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+                    Err(err) => panic!("{err}"),
+                }
+            }
+        });
+
+        self.load_pending();
+    }
+
     #[must_use]
     pub fn get_and_wait(&self, position: I16Vec2) -> Pin<Box<dyn Future<Output = Bytes> + Send>> {
         if let Some(cached) = self.get_cached(position) {

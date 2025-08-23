@@ -11,7 +11,13 @@ use crate::egress::Egress;
 
 /// Maximum chunk distance between a packet's center and a player for a local broadcast to be sent to
 /// that player
-const RADIUS: i16 = 16;
+const LOCAL_RADIUS: i16 = 16;
+
+/// Maximum chunk distance between a packet's center and a player for an unsubscribed player to subscribe to a channel
+const SUBSCRIBE_RADIUS: i16 = 16;
+
+/// Minimum chunk distance between a packet's center and a player for a subscribed player to be unsubscribed from a channel.
+const UNSUBSCRIBE_RADIUS: i16 = SUBSCRIBE_RADIUS + 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Player {
@@ -40,6 +46,7 @@ pub struct Channel {
     /// List of connection ids that are currently subscribed to this channel
     subscribed_connections: HashSet<u64>,
 
+    cached_subscribe_packets: Option<Bytes>,
     unsubscribe_packets: Bytes,
 }
 
@@ -111,6 +118,7 @@ impl BufferedEgress {
                         .insert(packet.channel_id.into(), Channel {
                             pending_connections: HashSet::new(),
                             subscribed_connections: HashSet::new(),
+                            cached_subscribe_packets: None,
                             unsubscribe_packets: Bytes::from(unsubscribe_packets),
                         });
 
@@ -137,16 +145,37 @@ impl BufferedEgress {
                     let Ok(channel_position) = rkyv::deserialize::<_, !>(&update.position);
                     let channel_position = I16Vec2::from(channel_position);
 
-                    let min = channel_position - I16Vec2::splat(RADIUS);
-                    let max = channel_position + I16Vec2::splat(RADIUS);
-
-                    let aabb = Aabb::new(min, max);
-
-                    let slices = self.player_bvh.get_in(aabb);
+                    // The separation between the checks for which players should remain subscribed and the checks for which unsubscribed players should subscribe with separate radii for each check exists so that if a player repeatedly crosses the same chunk boundary, the player won't subscribe and unsubscribe from the same channels repeatedly. Avoiding this issue helps reduce network and CPU usage.
 
                     let mut should_remain_subscribed = HashSet::new();
 
-                    for slice in slices {
+                    // Determine which subscribed players should remain subscribed to this channel. All players below the unsubscribe radius can remain subscribed to this
+                    // channel.
+                    for slice in self.player_bvh.get_in(Aabb::new(
+                        channel_position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                        channel_position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                    )) {
+                        let (_, streams) = self.player_bvh.inner();
+
+                        let start = slice.start as usize;
+                        let end = slice.end as usize;
+
+                        let streams = &streams[start..end];
+                        for &stream in streams {
+                            // This steam is below the unsubscribe radius...
+                            if channel.subscribed_connections.contains(&stream) {
+                                // ... and it is already subscribed, so it can remain subscribed to this channel
+                                should_remain_subscribed.insert(stream);
+                            }
+                        }
+                    }
+
+                    // Determine which unsubscribed players should subscribe to this channel. All players below the subscribe radius can subscribe to this
+                    // channel.
+                    for slice in self.player_bvh.get_in(Aabb::new(
+                        channel_position - I16Vec2::splat(SUBSCRIBE_RADIUS),
+                        channel_position + I16Vec2::splat(SUBSCRIBE_RADIUS),
+                    )) {
                         let (_, streams) = self.player_bvh.inner();
 
                         let start = slice.start as usize;
@@ -164,14 +193,15 @@ impl BufferedEgress {
                             }
 
                             // This stream should be subscribed to this channel...
-                            if channel.subscribed_connections.contains(&stream) {
-                                // ... and should remain subscribed to this channel
-                                should_remain_subscribed.insert(stream);
-                            } else {
+                            if !channel.subscribed_connections.contains(&stream) {
                                 // ... but it is not currently subscribed
+
                                 if channel.pending_connections.is_empty() {
                                     // Request subscribe packets from the server
-                                    requested_subscriptions.push(channel_id);
+                                    requested_subscriptions.push((
+                                        channel_id,
+                                        channel.cached_subscribe_packets.is_some(),
+                                    ));
                                 }
                                 channel.pending_connections.insert(stream);
                             }
@@ -230,8 +260,6 @@ impl BufferedEgress {
             ArchivedServerToProxyMessage::SubscribeChannelPackets(packet) => {
                 let exclude = u64::from(packet.exclude);
                 let channel_id = packet.channel_id.into();
-                let data =
-                    Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
                 let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
                     error!("server sent SubscribeChannelPackets for a channel that does not exist");
                     return;
@@ -243,6 +271,29 @@ impl BufferedEgress {
                     );
                     return;
                 }
+
+                // TODO no box
+
+                let data = if let Some(data) =
+                    rkyv::deserialize::<Option<Box<[u8]>>, rkyv::rancor::Error>(&packet.data)
+                        .unwrap()
+                {
+                    let bytes = Bytes::from(data);
+                    channel.cached_subscribe_packets = packet.cache.then(|| bytes.clone());
+                    bytes
+                } else {
+                    let Some(bytes) = channel.cached_subscribe_packets.clone() else {
+                        error!(
+                            "server sent SubscribeChannelPackets without subscribe packets, but \
+                             the subscribe packets are not cached on the proxy"
+                        );
+                        return;
+                    };
+                    if !packet.cache {
+                        channel.cached_subscribe_packets = None;
+                    }
+                    bytes
+                };
 
                 for &stream in &channel.pending_connections {
                     if stream == exclude {
@@ -281,8 +332,8 @@ impl BufferedEgress {
                     Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
 
                 let position = I16Vec2::new(center_x, center_z);
-                let min = position - I16Vec2::splat(RADIUS);
-                let max = position + I16Vec2::splat(RADIUS);
+                let min = position - I16Vec2::splat(LOCAL_RADIUS);
+                let max = position + I16Vec2::splat(LOCAL_RADIUS);
 
                 let aabb = Aabb::new(min, max);
 

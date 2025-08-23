@@ -176,7 +176,7 @@ async fn handle_proxy_messages(
             }
             ArchivedProxyToServerMessage::RequestSubscribeChannelPackets(message) => {
                 let channels =
-                    match rkyv::deserialize::<Box<[u32]>, rkyv::rancor::Error>(&message.channels) {
+                    match rkyv::deserialize::<Box<[_]>, rkyv::rancor::Error>(&message.channels) {
                         Ok(channels) => channels,
                         Err(e) => {
                             error!(
@@ -191,16 +191,20 @@ async fn handle_proxy_messages(
                     // TODO: Is it possible to avoid this second allocation?
                     let channels = channels
                         .into_iter()
-                        .filter_map(|channel_id| match Entity::from_id(channel_id, world) {
-                            Ok(channel) => Some(RequestSubscribeChannelPackets {
-                                channel,
-                                requester: proxy_id,
-                            }),
-                            Err(e) => {
-                                error!(
-                                    "RequestSubscribeChannelPackets: channel id is invalid: {e}"
-                                );
-                                None
+                        .filter_map(|(channel_id, cached)| {
+                            match Entity::from_id(channel_id, world) {
+                                Ok(channel) => Some(RequestSubscribeChannelPackets {
+                                    channel,
+                                    requester: proxy_id,
+                                    cached,
+                                }),
+                                Err(e) => {
+                                    error!(
+                                        "RequestSubscribeChannelPackets: channel id is invalid: \
+                                         {e}"
+                                    );
+                                    None
+                                }
                             }
                         })
                         .collect::<Vec<_>>();

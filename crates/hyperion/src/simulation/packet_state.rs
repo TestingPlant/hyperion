@@ -24,8 +24,6 @@ pub struct Login(pub(crate) ());
 /// - [`crate::simulation::Uuid`]
 /// - [`crate::simulation::AiTargetable`]
 /// - [`crate::simulation::ImmuneStatus`]
-/// - [`crate::simulation::ChunkPosition`]
-/// - [`crate::egress::sync_chunks::ChunkSendQueue`]
 /// - [`crate::simulation::Yaw`]
 /// - [`crate::simulation::Pitch`]
 /// - [`crate::simulation::skin::PlayerSkin`]

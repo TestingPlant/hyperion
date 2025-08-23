@@ -19,12 +19,10 @@ use valence_protocol::{
 use crate::{
     InitializePlayerPosition,
     command_channel::CommandChannel,
-    egress::sync_chunks::ChunkSendQueue,
     net::{Compose, MINECRAFT_VERSION, PROTOCOL_VERSION, PacketDecoder},
     runtime::AsyncRuntime,
     simulation::{
         AiTargetable,
-        ChunkPosition,
         ImmuneStatus,
         Pitch,
         Uuid,
@@ -228,8 +226,6 @@ pub fn process_login_hello(
                 AiTargetable,
                 ImmuneStatus::default(),
                 Uuid::from(uuid),
-                ChunkPosition::null(),
-                ChunkSendQueue::default(),
                 Yaw::default(),
                 Pitch::default(),
                 Velocity::default(),

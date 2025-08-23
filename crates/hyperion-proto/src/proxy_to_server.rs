@@ -31,8 +31,10 @@ pub enum PlayerDisconnectReason<'a> {
 
 #[derive(Archive, Deserialize, Serialize, Clone, PartialEq, Debug)]
 pub struct RequestSubscribeChannelPackets<'a> {
+    /// Stores a list of channels and whether each channel has a cached response stored by the
+    /// proxy
     #[rkyv(with = InlineAsBox)]
-    pub channels: &'a [u32],
+    pub channels: &'a [(u32, bool)],
 }
 
 #[derive(Archive, Deserialize, Serialize, Clone, PartialEq, Debug)]

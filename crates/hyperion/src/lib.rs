@@ -61,7 +61,7 @@ use crate::{
     ingress::IngressPlugin,
     net::{Compose, ConnectionId, IoBuf, MAX_PACKET_SIZE, PacketDecoder, proxy::init_proxy_comms},
     runtime::AsyncRuntime,
-    simulation::{IgnMap, SimPlugin, StreamLookup, blocks::Blocks},
+    simulation::{ChunkLookup, IgnMap, SimPlugin, StreamLookup, blocks::Blocks},
     spatial::SpatialPlugin,
     util::mojang::{ApiProvider, MojangClient},
 };
@@ -265,6 +265,7 @@ impl Plugin for HyperionCore {
         app.insert_resource(runtime);
         app.insert_resource(CraftingRegistry::default());
         app.insert_resource(StreamLookup::default());
+        app.insert_resource(ChunkLookup::default());
 
         app.add_plugins((
             bevy::time::TimePlugin,

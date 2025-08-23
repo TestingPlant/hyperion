@@ -6,7 +6,14 @@
 use std::net::SocketAddr;
 
 use bevy::prelude::*;
-use hyperion::{Crypto, Endpoint, HyperionCore, simulation::packet_state, spatial::Spatial};
+use glam::I16Vec2;
+use hyperion::{
+    Crypto, Endpoint, HyperionCore,
+    net::Channel,
+    runtime::AsyncRuntime,
+    simulation::{ChunkLookup, ChunkPosition, blocks::Blocks, packet_state},
+    spatial::Spatial,
+};
 use hyperion_proxy_module::SetProxyAddress;
 use valence_text::IntoText;
 
@@ -18,6 +25,9 @@ use crate::{
     },
     skin::SkinPlugin,
 };
+
+const CHUNK_MIN: I16Vec2 = I16Vec2::splat(-32);
+const CHUNK_MAX: I16Vec2 = I16Vec2::splat(32);
 
 mod command;
 mod plugin;
@@ -107,6 +117,21 @@ fn initialize_player(
         .insert((Spatial, Team::Red));
 }
 
+fn initialize_chunk_channels(world: &mut World) {
+    let positions = (CHUNK_MIN.x..=CHUNK_MAX.x)
+        .flat_map(|x| (CHUNK_MIN.y..=CHUNK_MAX.y).map(move |y| I16Vec2::new(x, y)));
+    for position in positions.clone() {
+        let channel = world.spawn((Channel, ChunkPosition { position })).id();
+        world
+            .resource_mut::<ChunkLookup>()
+            .insert(position, channel);
+    }
+    world.resource_scope::<Blocks, _>(move |world, mut blocks| {
+        let tasks = world.resource::<AsyncRuntime>();
+        blocks.block_and_load_many(positions, tasks);
+    });
+}
+
 #[derive(Component)]
 pub struct BedwarsPlugin;
 
@@ -147,6 +172,8 @@ pub fn init_game(address: SocketAddr, crypto: Crypto) -> anyhow::Result<()> {
         server: address.to_string(),
         ..SetProxyAddress::default()
     });
+
+    initialize_chunk_channels(app.world_mut());
 
     app.run();
 

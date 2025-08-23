@@ -1,4 +1,7 @@
-use rkyv::{Archive, Deserialize, Serialize, with::InlineAsBox};
+use rkyv::{
+    Archive, Deserialize, Serialize,
+    with::{InlineAsBox, Map},
+};
 
 use crate::ChunkPosition;
 
@@ -47,8 +50,13 @@ pub struct SubscribeChannelPackets<'a> {
     pub channel_id: u32,
     pub exclude: u64,
 
-    #[rkyv(with = InlineAsBox)]
-    pub data: &'a [u8],
+    /// Whether to cache this response
+    pub cache: bool,
+
+    /// Data to be sent to pending subscribers. If this is set to `None`, the previous cached response will
+    /// be used.
+    #[rkyv(with = Map<InlineAsBox>)]
+    pub data: Option<&'a [u8]>,
 }
 
 #[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq)]

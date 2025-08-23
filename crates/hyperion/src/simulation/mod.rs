@@ -8,7 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use derive_more::{Add, Constructor, Deref, DerefMut, Display, From, Sub};
 use geometry::aabb::Aabb;
 use glam::{DVec3, I16Vec2, IVec3, Vec3};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 use valence_protocol::{
@@ -57,6 +57,24 @@ pub struct StreamLookup {
 pub struct PlayerUuidLookup {
     /// The UUID of all players
     inner: HashMap<Uuid, Entity>,
+}
+
+#[derive(Resource, Default, Debug, Deref, DerefMut)]
+pub struct ChunkLookup {
+    /// The channel of all chunks, identified by chunk coordinates
+    inner: FxHashMap<I16Vec2, Entity>,
+}
+
+/// Chunk position for chunk channel entities
+#[derive(Component, Debug, Copy, Clone, Deref, DerefMut)]
+pub struct ChunkPosition {
+    pub position: I16Vec2,
+}
+
+/// Stores which proxies caches this channel's subscribe packets
+#[derive(Component, Default, Debug, Deref, DerefMut)]
+pub struct ChannelCache {
+    inner: FxHashSet<ProxyId>,
 }
 
 /// Communicates with the proxy server.
@@ -408,24 +426,6 @@ impl Position {
     }
 }
 
-#[derive(Component, Debug, Copy, Clone)]
-pub struct ChunkPosition {
-    pub position: I16Vec2,
-}
-
-const SANE_MAX_RADIUS: i16 = 128;
-
-impl ChunkPosition {
-    #[must_use]
-    #[expect(missing_docs)]
-    pub const fn null() -> Self {
-        // todo: huh
-        Self {
-            position: I16Vec2::new(SANE_MAX_RADIUS, SANE_MAX_RADIUS),
-        }
-    }
-}
-
 #[must_use]
 pub fn aabb(position: Vec3, size: EntitySize) -> Aabb {
     let half_width = size.half_width;
@@ -727,6 +727,8 @@ impl Plugin for SimPlugin {
 pub struct RequestSubscribeChannelPackets {
     pub channel: Entity,
     pub requester: ProxyId,
+    /// Whether the proxy already has the previous subscribe packets cached
+    pub cached: bool,
 }
 
 #[derive(Component)]

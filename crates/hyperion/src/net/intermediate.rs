@@ -36,7 +36,8 @@ pub struct SubscribeChannelPackets<'a> {
     pub receiver: ProxyId,
     pub exclude: Option<ConnectionId>,
 
-    pub data: &'a [u8],
+    pub cache: bool,
+    pub data: Option<&'a [u8]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -161,6 +162,7 @@ impl IntermediateServerToProxyMessage<'_> {
                             .exclude
                             .and_then(filter_map_connection_id)
                             .unwrap_or_default(),
+                        cache: message.cache,
                         data: message.data,
                     },
                 )

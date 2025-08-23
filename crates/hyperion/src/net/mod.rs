@@ -688,7 +688,8 @@ impl IoBuf {
         &self,
         channel: ChannelId,
         receiver: ProxyId,
-        packets: &[u8],
+        cache: bool,
+        packets: Option<&[u8]>,
         exclude: Option<ConnectionId>,
     ) {
         self.add_proxy_message(&IntermediateServerToProxyMessage::SubscribeChannelPackets(
@@ -696,6 +697,7 @@ impl IoBuf {
                 channel_id: channel.inner(),
                 receiver,
                 exclude,
+                cache,
                 data: packets,
             },
         ));
