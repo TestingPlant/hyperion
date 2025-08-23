@@ -10,6 +10,7 @@ use std::{
 };
 
 use bevy::prelude::*;
+use bytes::Bytes;
 use hyperion_proto::ArchivedProxyToServerMessage;
 use hyperion_utils::EntityExt;
 use rustc_hash::FxHashMap;
@@ -20,14 +21,17 @@ use rustls::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
-use valence_protocol::{VarInt, packets::play};
 
 use crate::{
     ConnectionId, Crypto, PacketDecoder,
     command_channel::CommandChannel,
-    net::{Channel, ChannelId, Compose, IoBuf, ProxyId},
+    egress::channel::add_channel_message,
+    net::{Channel, Compose, IoBuf, ProxyId, intermediate::IntermediateServerToProxyMessage},
     runtime::AsyncRuntime,
-    simulation::{EgressComm, RequestSubscribeChannelPackets, StreamLookup, packet_state},
+    simulation::{
+        ChunkPosition, EgressComm, Position, RequestSubscribeChannelPackets, StreamLookup,
+        entity_kind::EntityKind, packet_state,
+    },
 };
 
 // TODO: Determine a better default
@@ -50,6 +54,36 @@ fn get_pid_from_port(port: u16) -> Result<Option<u32>, std::io::Error> {
     let pid = stdout.lines().next().and_then(|line| line.parse().ok());
 
     Ok(pid)
+}
+
+fn announce_existing_channels(
+    command_channel: &CommandChannel,
+    tx: tokio::sync::mpsc::UnboundedSender<Bytes>,
+    proxy_id: ProxyId,
+) {
+    command_channel.push(move |world: &mut World| {
+        let mut channel_query = world.query_filtered::<Entity, With<Channel>>();
+        let mut entity_query = world.query_filtered::<&Position, With<EntityKind>>();
+        let mut chunk_query = world.query::<&ChunkPosition>();
+        let compose = world.resource::<Compose>();
+        for channel in channel_query.iter(world) {
+            add_channel_message(
+                channel,
+                entity_query.query(world),
+                chunk_query.query(world),
+                compose,
+                |message| {
+                    let message = IntermediateServerToProxyMessage::AddChannel(message);
+                    let Some(message) = message.transform_for_proxy(proxy_id) else {
+                        error!("transformed AddChannel does not exist");
+                        return;
+                    };
+
+                    tx.send(IoBuf::encode_proxy_message(&message)).unwrap();
+                },
+            );
+        }
+    });
 }
 
 async fn handle_proxy_messages(
@@ -350,30 +384,8 @@ async fn inner(socket: SocketAddr, crypto: Crypto, command_channel: CommandChann
                         });
                     });
 
-                    command_channel.push(move |world: &mut World| {
-                        // Let the proxy know about all packet channels that exist at the moment
-
-                        let mut query = world.query_filtered::<Entity, With<Channel>>();
-                        let compose = world.resource::<Compose>();
-                        for channel in query.iter(world) {
-                            let packet = play::EntitiesDestroyS2c {
-                                entity_ids: vec![VarInt(channel.minecraft_id())].into(),
-                            };
-
-                            let packet_buf =
-                                compose.io_buf().encode_packet(&packet, compose).unwrap();
-
-                            tx.send(IoBuf::encode_proxy_message(
-                                &hyperion_proto::ServerToProxyMessage::AddChannel(
-                                    hyperion_proto::AddChannel {
-                                        channel_id: ChannelId::from(channel).inner(),
-                                        unsubscribe_packets: &packet_buf,
-                                    },
-                                ),
-                            ))
-                            .unwrap();
-                        }
-                    });
+                    // Let the proxy know about all packet channels that exist at the moment
+                    announce_existing_channels(&command_channel, tx, proxy_id);
 
                     tokio::spawn(handle_proxy_messages(
                         read,

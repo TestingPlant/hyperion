@@ -13,9 +13,10 @@ pub struct UpdatePlayerPositions<'a> {
     pub updates: &'a [UpdatePlayerPosition],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct AddChannel<'a> {
     pub channel_id: u32,
+    pub position: ChunkPosition,
 
     pub unsubscribe_packets: &'a [u8],
 }
@@ -139,6 +140,7 @@ impl IntermediateServerToProxyMessage<'_> {
             Self::AddChannel(message) => Some(ServerToProxyMessage::AddChannel(
                 hyperion_proto::AddChannel {
                     channel_id: message.channel_id,
+                    position: message.position,
                     unsubscribe_packets: message.unsubscribe_packets,
                 },
             )),

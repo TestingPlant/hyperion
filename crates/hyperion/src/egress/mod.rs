@@ -12,7 +12,7 @@ use crate::{
     },
     simulation::{ChannelCache, ChunkLookup, Position},
 };
-mod channel;
+pub mod channel;
 pub mod metadata;
 pub mod player_join;
 mod stats;

@@ -9,7 +9,7 @@ use crate::{
     egress::metadata::show_all,
     net::{
         Channel, ChannelId, Compose, ConnectionId,
-        intermediate::{IntermediateServerToProxyMessage, UpdateChannelPositions},
+        intermediate::{AddChannel, IntermediateServerToProxyMessage, UpdateChannelPositions},
     },
     simulation::{
         ChannelCache, ChunkPosition, Pitch, Position, RequestSubscribeChannelPackets, Uuid,
@@ -20,29 +20,34 @@ use crate::{
     },
 };
 
-fn add_channel(
-    trigger: Trigger<'_, OnAdd, Channel>,
-    entity_query: Query<'_, '_, (), With<EntityKind>>,
+pub(crate) fn add_channel_message(
+    channel: Entity,
+    entity_query: Query<'_, '_, &Position, With<EntityKind>>,
     chunk_query: Query<'_, '_, &ChunkPosition>,
-    compose: Res<'_, Compose>,
-    mut commands: Commands<'_, '_>,
+    compose: &Compose,
+    callback: impl FnOnce(AddChannel<'_>),
 ) {
-    let channel = trigger.target();
-    let packet_buf = match (entity_query.get(channel), chunk_query.get(channel)) {
-        (Ok(()), Err(_)) => {
+    let (position, packet_buf) = match (entity_query.get(channel), chunk_query.get(channel)) {
+        (Ok(position), Err(_)) => {
             let packet = play::EntitiesDestroyS2c {
                 entity_ids: vec![VarInt(channel.minecraft_id())].into(),
             };
 
-            compose.io_buf().encode_packet(&packet, &compose).unwrap()
+            (
+                position.to_chunk(),
+                compose.io_buf().encode_packet(&packet, compose).unwrap(),
+            )
         }
         (Err(_), Ok(chunk_position)) => {
             let pos = ChunkPos::new(i32::from(chunk_position.x), i32::from(chunk_position.y));
             let packet = play::UnloadChunkS2c { pos };
 
-            compose.io_buf().encode_packet(&packet, &compose).unwrap()
+            (
+                **chunk_position,
+                compose.io_buf().encode_packet(&packet, compose).unwrap(),
+            )
         }
-        (Ok(()), Ok(_)) => {
+        (Ok(_), Ok(_)) => {
             error!(
                 "failed to add channel: channel cannot have both EntityKind and ChunkPosition \
                  component"
@@ -58,7 +63,26 @@ fn add_channel(
         }
     };
 
-    compose.io_buf().add_channel(channel.into(), &packet_buf);
+    callback(AddChannel {
+        channel_id: ChannelId::from(channel).inner(),
+        position: position.into(),
+        unsubscribe_packets: &packet_buf,
+    });
+}
+
+fn add_channel(
+    trigger: Trigger<'_, OnAdd, Channel>,
+    entity_query: Query<'_, '_, &Position, With<EntityKind>>,
+    chunk_query: Query<'_, '_, &ChunkPosition>,
+    compose: Res<'_, Compose>,
+    mut commands: Commands<'_, '_>,
+) {
+    let channel = trigger.target();
+    add_channel_message(channel, entity_query, chunk_query, &compose, |message| {
+        compose
+            .io_buf()
+            .add_proxy_message(&IntermediateServerToProxyMessage::AddChannel(message));
+    });
 
     commands.entity(channel).insert(ChannelCache::default());
 }
@@ -71,32 +95,13 @@ fn remove_channel(trigger: Trigger<'_, OnDespawn, Channel>, compose: Res<'_, Com
 
 fn update_channel_positions(
     compose: Res<'_, Compose>,
-    query: Query<'_, '_, (Entity, Option<&Position>, Option<&ChunkPosition>), With<Channel>>,
+    query: Query<'_, '_, (Entity, &Position), With<Channel>>,
 ) {
     let updates = query
         .iter()
-        .filter_map(|(entity, position, chunk_position)| {
-            Some(UpdateChannelPosition {
-                channel_id: entity.id(),
-                position: match (position, chunk_position) {
-                    (Some(position), None) => Some(position.to_chunk().into()),
-                    (None, Some(chunk_position)) => Some((**chunk_position).into()),
-                    (Some(_), Some(_)) => {
-                        error!(
-                            "failed to update channel positions: channel cannot have both \
-                             Position and ChunkPosition component"
-                        );
-                        None
-                    }
-                    (None, None) => {
-                        error!(
-                            "failed to update channel positions: channel should have one of the \
-                             following components: Position, ChunkPosition"
-                        );
-                        None
-                    }
-                }?,
-            })
+        .map(|(entity, position)| UpdateChannelPosition {
+            channel_id: entity.id(),
+            position: position.to_chunk().into(),
         })
         .collect::<Vec<_>>();
 
@@ -282,7 +287,10 @@ fn chunk_subscribe_channel_packets(blocks: &Blocks, chunk_position: ChunkPositio
             chunk.base_packet_bytes.clone()
         }
         GetChunk::Loading => {
-            todo!()
+            error!(
+                "failed to create subscribe channel packets for chunk channel: chunk is unloaded"
+            );
+            Bytes::new()
         }
     }
 }

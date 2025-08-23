@@ -675,15 +675,6 @@ impl IoBuf {
         ));
     }
 
-    pub(crate) fn add_channel(&self, channel: ChannelId, unsubscribe_packets: &[u8]) {
-        self.add_proxy_message(&IntermediateServerToProxyMessage::AddChannel(
-            intermediate::AddChannel {
-                channel_id: channel.inner(),
-                unsubscribe_packets,
-            },
-        ));
-    }
-
     pub(crate) fn send_subscribe_channel_packets(
         &self,
         channel: ChannelId,

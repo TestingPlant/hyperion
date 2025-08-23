@@ -48,6 +48,8 @@ pub struct Channel {
 
     cached_subscribe_packets: Option<Bytes>,
     unsubscribe_packets: Bytes,
+
+    chunk_position: I16Vec2,
 }
 
 #[derive(Default)]
@@ -99,6 +101,7 @@ impl BufferedEgress {
                 self.player_bvh = Bvh::build(&mut players, ());
             }
             ArchivedServerToProxyMessage::AddChannel(packet) => {
+                let Ok(position) = rkyv::deserialize::<_, !>(&packet.position);
                 let unsubscribe_packets = match rkyv::deserialize::<_, rkyv::rancor::Error>(
                     &packet.unsubscribe_packets,
                 ) {
@@ -120,6 +123,7 @@ impl BufferedEgress {
                             subscribed_connections: HashSet::new(),
                             cached_subscribe_packets: None,
                             unsubscribe_packets: Bytes::from(unsubscribe_packets),
+                            chunk_position: position.into(),
                         });
 
                 if previous_channel.is_some() {
@@ -132,6 +136,8 @@ impl BufferedEgress {
             ArchivedServerToProxyMessage::UpdateChannelPositions(packet) => {
                 let mut requested_subscriptions = Vec::new();
                 let players = self.egress.player_registry.pin_owned();
+
+                // Update channel positions
                 for update in packet.updates.get() {
                     let channel_id = update.channel_id.into();
                     let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
@@ -142,9 +148,15 @@ impl BufferedEgress {
                         continue;
                     };
 
-                    let Ok(channel_position) = rkyv::deserialize::<_, !>(&update.position);
-                    let channel_position = I16Vec2::from(channel_position);
+                    let Ok(position) = rkyv::deserialize::<_, !>(&update.position);
+                    let position = I16Vec2::from(position);
+                    channel.chunk_position = position;
+                }
 
+                // Determine which players to unsubscribe and subscribe to each channel. This is
+                // done in a separate loop to also calculate this info for channels who didn't update
+                // their position
+                for (&channel_id, channel) in &mut self.channel_manager.channels {
                     // The separation between the checks for which players should remain subscribed and the checks for which unsubscribed players should subscribe with separate radii for each check exists so that if a player repeatedly crosses the same chunk boundary, the player won't subscribe and unsubscribe from the same channels repeatedly. Avoiding this issue helps reduce network and CPU usage.
 
                     let mut should_remain_subscribed = HashSet::new();
@@ -152,8 +164,8 @@ impl BufferedEgress {
                     // Determine which subscribed players should remain subscribed to this channel. All players below the unsubscribe radius can remain subscribed to this
                     // channel.
                     for slice in self.player_bvh.get_in(Aabb::new(
-                        channel_position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-                        channel_position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                        channel.chunk_position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                        channel.chunk_position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
                     )) {
                         let (_, streams) = self.player_bvh.inner();
 
@@ -173,8 +185,8 @@ impl BufferedEgress {
                     // Determine which unsubscribed players should subscribe to this channel. All players below the subscribe radius can subscribe to this
                     // channel.
                     for slice in self.player_bvh.get_in(Aabb::new(
-                        channel_position - I16Vec2::splat(SUBSCRIBE_RADIUS),
-                        channel_position + I16Vec2::splat(SUBSCRIBE_RADIUS),
+                        channel.chunk_position - I16Vec2::splat(SUBSCRIBE_RADIUS),
+                        channel.chunk_position + I16Vec2::splat(SUBSCRIBE_RADIUS),
                     )) {
                         let (_, streams) = self.player_bvh.inner();
 

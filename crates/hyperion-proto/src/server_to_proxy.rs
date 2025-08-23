@@ -21,6 +21,7 @@ pub struct UpdatePlayerPositions {
 #[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq)]
 pub struct AddChannel<'a> {
     pub channel_id: u32,
+    pub position: ChunkPosition,
 
     #[rkyv(with = InlineAsBox)]
     pub unsubscribe_packets: &'a [u8],
