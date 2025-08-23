@@ -1,6 +1,12 @@
 //! Player connection handling and packet processing.
 
-use std::{sync::{Arc, atomic::{self, AtomicUsize}}, io::IoSlice};
+use std::{
+    io::IoSlice,
+    sync::{
+        Arc,
+        atomic::{self, AtomicUsize},
+    },
+};
 
 use arrayvec::ArrayVec;
 use bytes::Bytes;

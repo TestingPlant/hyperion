@@ -16,7 +16,11 @@
     clippy::future_not_send
 )]
 
-use std::{fmt::Debug, path::Path, sync::{Arc, atomic::AtomicUsize}};
+use std::{
+    fmt::Debug,
+    path::Path,
+    sync::{Arc, atomic::AtomicUsize},
+};
 
 use anyhow::Context;
 use colored::Colorize;
@@ -244,7 +248,10 @@ async fn connect_to_server_and_run_proxy(
         let total_bytes_pending_send = Arc::new(AtomicUsize::new(0));
 
         let (tx, rx) = kanal::unbounded_async();
-        registry.insert(player_id_on, PlayerHandle::new(tx, total_bytes_pending_send.clone()));
+        registry.insert(
+            player_id_on,
+            PlayerHandle::new(tx, total_bytes_pending_send.clone()),
+        );
 
         // todo: some SlotMap like thing
         debug!("got player with id {player_id_on:?}");

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::SystemTime};
 
 use bvh::{Aabb, Bvh, Data, Point};
 use bytes::Bytes;
@@ -317,7 +317,11 @@ impl BufferedEgress {
                     }
 
                     debug!("subscribing player {stream} to channel {channel_id}");
-                    let sent = self.egress.maybe_unicast(stream, data.clone(), MAX_PENDING_BYTES_FOR_SUBSCRIBE);
+                    let sent = self.egress.maybe_unicast(
+                        stream,
+                        data.clone(),
+                        MAX_PENDING_BYTES_FOR_SUBSCRIBE,
+                    );
 
                     if sent {
                         channel.subscribed_connections.insert(stream);
@@ -407,6 +411,30 @@ impl BufferedEgress {
             }
             ArchivedServerToProxyMessage::Shutdown(pkt) => {
                 self.egress.handle_shutdown(pkt);
+            }
+            ArchivedServerToProxyMessage::CurrentTime(pkt) => {
+                let Ok(time_since_epoch) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+                else {
+                    error!("system time must be after unix epoch");
+                    return;
+                };
+
+                let current_seconds_since_epoch = time_since_epoch.as_secs();
+                if pkt.seconds_since_epoch > current_seconds_since_epoch {
+                    error!(
+                        "game server's system clock is {} seconds ahead",
+                        pkt.seconds_since_epoch - current_seconds_since_epoch
+                    );
+                    return;
+                }
+
+                let delay = current_seconds_since_epoch - pkt.seconds_since_epoch;
+                if delay > 5 {
+                    warn!(
+                        "proxy is running too slow - it is {delay} seconds behind on processing \
+                         server to proxy messages"
+                    );
+                }
             }
         }
     }

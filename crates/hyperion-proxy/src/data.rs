@@ -43,7 +43,10 @@ pub struct PlayerHandle {
 
 impl PlayerHandle {
     #[must_use]
-    pub const fn new(writer: kanal::AsyncSender<Bytes>, total_bytes_pending_send: Arc<AtomicUsize>) -> Self {
+    pub const fn new(
+        writer: kanal::AsyncSender<Bytes>,
+        total_bytes_pending_send: Arc<AtomicUsize>,
+    ) -> Self {
         Self {
             writer,
             can_receive_broadcasts: AtomicBool::new(false),
@@ -66,7 +69,8 @@ impl PlayerHandle {
     }
 
     pub fn send(&self, bytes: Bytes) -> anyhow::Result<()> {
-        self.total_bytes_pending_send.fetch_add(bytes.len(), atomic::Ordering::Relaxed);
+        self.total_bytes_pending_send
+            .fetch_add(bytes.len(), atomic::Ordering::Relaxed);
         match self.writer.try_send(bytes) {
             Ok(true) => Ok(()),
 
@@ -83,6 +87,7 @@ impl PlayerHandle {
     }
 
     pub fn total_bytes_pending_send(&self) -> usize {
-        self.total_bytes_pending_send.load(atomic::Ordering::Relaxed)
+        self.total_bytes_pending_send
+            .load(atomic::Ordering::Relaxed)
     }
 }

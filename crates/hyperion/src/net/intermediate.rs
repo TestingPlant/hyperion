@@ -81,6 +81,11 @@ pub struct Shutdown {
     pub stream: ConnectionId,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CurrentTime {
+    pub seconds_since_epoch: u64,
+}
+
 #[derive(Clone, PartialEq)]
 pub enum IntermediateServerToProxyMessage<'a> {
     UpdatePlayerPositions(UpdatePlayerPositions<'a>),
@@ -94,6 +99,7 @@ pub enum IntermediateServerToProxyMessage<'a> {
     Unicast(Unicast<'a>),
     SetReceiveBroadcasts(SetReceiveBroadcasts),
     Shutdown(Shutdown),
+    CurrentTime(CurrentTime),
 }
 
 impl IntermediateServerToProxyMessage<'_> {
@@ -110,7 +116,10 @@ impl IntermediateServerToProxyMessage<'_> {
             | Self::Unicast(_)
             | Self::SetReceiveBroadcasts(_)
             | Self::Shutdown(_) => true,
-            Self::AddChannel(_) | Self::UpdateChannelPositions(_) | Self::RemoveChannel(_) => false,
+            Self::AddChannel(_)
+            | Self::UpdateChannelPositions(_)
+            | Self::RemoveChannel(_)
+            | Self::CurrentTime(_) => false,
         }
     }
 
@@ -212,6 +221,11 @@ impl IntermediateServerToProxyMessage<'_> {
             Self::Shutdown(message) => Some(ServerToProxyMessage::SetReceiveBroadcasts(
                 hyperion_proto::SetReceiveBroadcasts {
                     stream: filter_map_connection_id(message.stream)?,
+                },
+            )),
+            Self::CurrentTime(message) => Some(ServerToProxyMessage::CurrentTime(
+                hyperion_proto::CurrentTime {
+                    seconds_since_epoch: message.seconds_since_epoch,
                 },
             )),
         }

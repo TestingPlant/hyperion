@@ -108,6 +108,14 @@ pub struct Shutdown {
     pub stream: u64,
 }
 
+/// Stores the current time on the game server at the time of sending this message. This is useful
+/// to determine if a proxy is running slow and cannot keep up with the rate of server to proxy
+/// messages
+#[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq, Debug)]
+pub struct CurrentTime {
+    pub seconds_since_epoch: u64,
+}
+
 #[derive(Archive, Deserialize, Serialize, Clone, PartialEq)]
 pub enum ServerToProxyMessage<'a> {
     UpdatePlayerPositions(UpdatePlayerPositions),
@@ -121,4 +129,5 @@ pub enum ServerToProxyMessage<'a> {
     Unicast(Unicast<'a>),
     SetReceiveBroadcasts(SetReceiveBroadcasts),
     Shutdown(Shutdown),
+    CurrentTime(CurrentTime),
 }

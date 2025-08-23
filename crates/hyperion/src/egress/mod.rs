@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use bevy::prelude::*;
 use tracing::error;
 use valence_protocol::{VarInt, packets::play::PlayerActionResponseS2c};
@@ -7,7 +9,8 @@ use crate::{
     net::{
         Compose, ConnectionId,
         intermediate::{
-            IntermediateServerToProxyMessage, UpdatePlayerPosition, UpdatePlayerPositions,
+            CurrentTime, IntermediateServerToProxyMessage, UpdatePlayerPosition,
+            UpdatePlayerPositions,
         },
     },
     simulation::{ChannelCache, ChunkLookup, Position},
@@ -101,11 +104,29 @@ fn broadcast_chunk_deltas(
     }
 }
 
+fn send_time(compose: Res<'_, Compose>) {
+    let Ok(time_since_epoch) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
+        error!("system time must be after unix epoch");
+        return;
+    };
+
+    let seconds_since_epoch = time_since_epoch.as_secs();
+    compose
+        .io_buf()
+        .add_proxy_message(&IntermediateServerToProxyMessage::CurrentTime(
+            CurrentTime {
+                seconds_since_epoch,
+            },
+        ));
+}
+
 #[derive(Component)]
 pub struct EgressPlugin;
 
 impl Plugin for EgressPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(FixedUpdate, send_time);
+        // TODO use PostFixedUpdate
         app.add_systems(PostUpdate, (send_chunk_positions, broadcast_chunk_deltas));
         app.add_plugins((
             PlayerJoinPlugin,
