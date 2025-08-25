@@ -75,6 +75,8 @@ impl Plugin for StatsPlugin {
                      {avg_s60:.2} ms"
                 );
 
+                dbg!(&title);
+
                 let footer = format!("§d§l{player_count} players online");
 
                 let pkt = play::PlayerListHeaderS2c {

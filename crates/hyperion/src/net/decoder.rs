@@ -2,7 +2,7 @@ use anyhow::{Context, ensure};
 use bevy::prelude::*;
 use bytes::{Bytes, BytesMut};
 use itertools::Either;
-use packet_channel::RawPacket;
+use packet_channel::delimited::RawPacket;
 use valence_protocol::{
     CompressionThreshold, Decode, DecodeBytes, MAX_PACKET_SIZE, Packet, VarInt,
 };

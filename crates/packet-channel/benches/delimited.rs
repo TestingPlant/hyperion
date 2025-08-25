@@ -42,7 +42,7 @@ fn send_packet_channel(bencher: Bencher<'_, '_>, len: usize) {
     // Add the length prefix
     packet[0] = 64;
 
-    let (mut writer, mut reader) = packet_channel::channel(4096);
+    let (mut writer, mut reader) = packet_channel::delimited::channel(4096);
 
     bencher.counter(len).bench_local(|| {
         for _ in 0..black_box(len) {

@@ -92,7 +92,7 @@ fn try_next_frame(
     connection_id: ConnectionId,
     decoder: &PacketDecoder,
     decompressor: &mut libdeflater::Decompressor,
-    receiver: &mut packet_channel::Receiver,
+    receiver: &mut packet_channel::delimited::Receiver,
 ) -> Option<BorrowedPacketFrame> {
     let raw_packet = receiver.try_recv()?;
     match decoder.try_next_packet(decompressor, raw_packet) {
@@ -115,7 +115,7 @@ hyperion_packet_macros::for_each_state! {
                 Entity,
                 &ConnectionId,
                 &PacketDecoder,
-                &mut packet_channel::Receiver,
+                &mut packet_channel::delimited::Receiver,
             ),
             paste! { With<packet_state::[< #state:camel >]> }
             >,

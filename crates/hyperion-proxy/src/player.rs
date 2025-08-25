@@ -9,7 +9,6 @@ use std::{
 };
 
 use arrayvec::ArrayVec;
-use bytes::Bytes;
 use hyperion_proto::{
     PlayerConnect, PlayerDisconnect, PlayerDisconnectReason, PlayerPackets, ProxyToServerMessage,
 };
@@ -17,6 +16,7 @@ use rkyv::ser::allocator::Arena;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite},
     task::JoinHandle,
+    sync::Notify,
 };
 use tracing::{info, error, info_span, instrument, warn};
 
@@ -40,10 +40,11 @@ pub fn initiate_player_connection(
     socket: impl tokio::io::AsyncRead + AsyncWrite + Send + 'static,
     mut shutdown_signal: tokio::sync::watch::Receiver<Option<ShutdownType>>,
     player_id: u64,
-    incoming_packet_receiver: kanal::AsyncReceiver<Bytes>,
+    mut incoming_packet_receiver: packet_channel::raw::Receiver,
+    incoming_packet_notify: Arc<Notify>,
     total_bytes_pending_send: Arc<AtomicUsize>,
     server_sender: ServerSender,
-    connection_tx: kanal::AsyncSender<PlayerConnectionMessage>,
+    connection_tx: tokio::sync::mpsc::UnboundedSender<PlayerConnectionMessage>,
 ) -> JoinHandle<()> {
     let span = info_span!("player_connection", player_id);
     let _enter = span.enter();
@@ -115,16 +116,19 @@ pub fn initiate_player_connection(
 
     // Task for handling outgoing packets (proxy -> player)
     let mut packet_writer_task = tokio::spawn(async move {
-        while let Ok(outgoing_packet) = incoming_packet_receiver.recv().await {
-            let mut bytes = ArrayVec::<_, 16>::new();
-            bytes.push(outgoing_packet);
+        let mut open = true;
+        while open {
+            incoming_packet_notify.notified().await;
 
-            // Try reading more bytes from the channel
+            let mut bytes = ArrayVec::<_, 16>::new();
+
+            // Try reading as much data as possible
             while bytes.remaining_capacity() > 0 {
-                let Ok(Some(outgoing_packet)) = incoming_packet_receiver.try_recv() else {
+                let Ok(packet) = incoming_packet_receiver.try_recv() else { open = false; break; };
+                let Some(packet) = packet else {
                     break;
                 };
-                bytes.push(outgoing_packet);
+                bytes.push(packet);
             }
 
             // Convert the bytes into slices and count the total bytes
@@ -139,7 +143,9 @@ pub fn initiate_player_connection(
                 warn!("Error writing packets to player: {e:?}");
                 return;
             }
+            // tracing::info!("sent {total_bytes} ({} vectors)", slices.len());
             total_bytes_pending_send.fetch_sub(total_bytes, atomic::Ordering::Relaxed);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     });
 
@@ -186,7 +192,7 @@ pub fn initiate_player_connection(
             }
         }
 
-        if let Err(e) = connection_tx.send(PlayerConnectionMessage::RemovePlayer { stream: player_id }).await {
+        if let Err(e) = connection_tx.send(PlayerConnectionMessage::RemovePlayer { stream: player_id }) {
             error!("failed to send player connection message upon player disconnect: {e:?}");
         }
     })

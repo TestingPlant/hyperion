@@ -3868,6 +3868,8 @@ dependencies = [
  "hyperion-proto",
  "kanal",
  "more-asserts",
+ "packet-channel",
+ "rayon",
  "rkyv",
  "rustc-hash 2.1.1",
  "rustls",
@@ -5181,6 +5183,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "bevy",
+ "bytes",
  "divan",
  "more-asserts",
  "proptest",

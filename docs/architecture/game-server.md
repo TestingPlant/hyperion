@@ -7,7 +7,7 @@ flowchart TD
 subgraph Tokio_Tasks[Tokio Tasks]
 IT[I/O Tokio ingress task]
 ET[I/O Tokio egress task]
-HM[HashMap&lt;PlayerId, packet_channel::Sender&gt;]
+HM[HashMap&lt;PlayerId, packet_channel::delimited::Sender&gt;]
 IT --> HM
 end
 

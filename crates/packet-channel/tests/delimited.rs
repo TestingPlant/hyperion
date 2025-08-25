@@ -3,7 +3,7 @@ use std::{
     mem::size_of,
 };
 
-use packet_channel::SendError;
+use packet_channel::delimited::SendError;
 use proptest::prelude::*;
 use valence_protocol::{Encode, MAX_PACKET_SIZE, VarInt};
 
@@ -76,7 +76,7 @@ proptest! {
         // This is different from total_len because the channel uses a fixed-size u32 to store
         // length while the input uses a VarInt
         let total_encoded_packet_size = packets.iter().map(|packet| size_of::<u32>() + packet.len()).sum();
-        let (mut sender, mut receiver) = packet_channel::channel(total_encoded_packet_size);
+        let (mut sender, mut receiver) = packet_channel::delimited::channel(total_encoded_packet_size);
         assert!(receiver.try_recv().is_none());
         std::thread::scope(|s| {
             s.spawn(
@@ -109,7 +109,7 @@ proptest! {
     ) {
         let encoded_packets = encode(&packets, total_len);
 
-        let (mut sender, mut receiver) = packet_channel::channel(default_fragment_size);
+        let (mut sender, mut receiver) = packet_channel::delimited::channel(default_fragment_size);
         assert!(receiver.try_recv().is_none());
         std::thread::scope(|s| {
             s.spawn(
@@ -155,7 +155,7 @@ proptest! {
     ) {
         let encoded_packets = encode(&packets, total_len);
 
-        let (mut sender, mut receiver) = packet_channel::channel(default_fragment_size);
+        let (mut sender, mut receiver) = packet_channel::delimited::channel(default_fragment_size);
         assert!(receiver.try_recv().is_none());
         std::thread::scope(|s| {
             s.spawn(
@@ -196,7 +196,7 @@ proptest! {
         VarInt(MAX_PACKET_SIZE).encode(&mut cursor).unwrap();
         let max_packet_size_encoded = cursor.into_inner();
 
-        let (mut sender, mut receiver) = packet_channel::channel(default_fragment_size);
+        let (mut sender, mut receiver) = packet_channel::delimited::channel(default_fragment_size);
         assert!(receiver.try_recv().is_none());
         std::thread::scope(|s| {
             s.spawn(

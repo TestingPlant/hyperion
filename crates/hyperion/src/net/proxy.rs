@@ -92,7 +92,7 @@ async fn handle_proxy_messages(
     proxy_id: ProxyId,
 ) {
     let mut reader = ProxyReader::new(read);
-    let mut player_packet_sender: FxHashMap<u64, packet_channel::Sender> = FxHashMap::default();
+    let mut player_packet_sender: FxHashMap<u64, packet_channel::delimited::Sender> = FxHashMap::default();
 
     // Process packets
     loop {
@@ -123,7 +123,7 @@ async fn handle_proxy_messages(
                 let Ok(stream) = rkyv::deserialize::<u64, !>(&message.stream);
                 let connection_id = ConnectionId::new(stream, proxy_id);
 
-                let (sender, receiver) = packet_channel::channel(DEFAULT_FRAGMENT_SIZE);
+                let (sender, receiver) = packet_channel::delimited::channel(DEFAULT_FRAGMENT_SIZE);
                 if player_packet_sender.insert(stream, sender).is_some() {
                     error!(
                         "PlayerConnect: player with same stream id already exists in \
@@ -186,7 +186,7 @@ async fn handle_proxy_messages(
                 };
 
                 if let Err(e) = sender.send(&message.data) {
-                    use packet_channel::SendError;
+                    use packet_channel::delimited::SendError;
                     let needs_shutdown = match e {
                         SendError::ZeroLengthPacket => {
                             warn!("A player sent an illegal zero-length packet, disconnecting");

@@ -30,6 +30,7 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
     net::{TcpStream, ToSocketAddrs},
+    sync::Notify,
 };
 use tokio_rustls::TlsConnector;
 use tokio_util::net::Listener;
@@ -42,6 +43,9 @@ use crate::{
 
 /// 4 KiB
 const DEFAULT_BUFFER_SIZE: usize = 4 * 1024;
+
+/// 8 KiB
+const DEFAULT_FRAGMENT_SIZE: usize = 8 * 1024;
 
 pub mod cache;
 pub mod data;
@@ -67,7 +71,6 @@ enum ShutdownType {
     Full,
 }
 
-#[derive(Debug)]
 enum PlayerConnectionMessage {
     AddPlayer {
         stream: u64,
@@ -205,11 +208,10 @@ async fn connect_to_server_and_run_proxy(
 
     let mut handler = IngressHandler::new(BufReader::new(server_read), egress);
 
-    let (connection_tx, connection_rx) = kanal::unbounded_async();
+    let (connection_tx, mut connection_rx) = tokio::sync::mpsc::unbounded_channel();
 
     tokio::spawn({
         let mut shutdown_rx = shutdown_rx.clone();
-
         async move {
                 loop {
                     tokio::select! {
@@ -229,9 +231,9 @@ async fn connect_to_server_and_run_proxy(
                     },
                     message = connection_rx.recv() => {
                         match message {
-                            Ok(message) => handler.handle_player_connection_message(message),
-                            Err(e) => {
-                                error!("Error reading from player connection message channel: {e:?}");
+                            Some(message) => handler.handle_player_connection_message(message),
+                            None => {
+                                error!("Error reading from player connection message channel: channel closed");
                                 break;
                             }
                         }
@@ -263,12 +265,14 @@ async fn connect_to_server_and_run_proxy(
 
         let total_bytes_pending_send = Arc::new(AtomicUsize::new(0));
 
-        let (tx, rx) = kanal::unbounded_async();
+        let notify = Arc::new(Notify::new());
+        let tx = packet_channel::raw::Sender::new(DEFAULT_FRAGMENT_SIZE);
+        let rx = tx.receiver();
 
         // todo: some SlotMap like thing
         debug!("got player with id {player_id_on:?}");
 
-        if let Err(e) = connection_tx.send(dbg!(PlayerConnectionMessage::AddPlayer { stream: player_id_on, handle: PlayerHandle::new(tx, total_bytes_pending_send.clone()) })).await {
+        if let Err(e) = connection_tx.send(PlayerConnectionMessage::AddPlayer { stream: player_id_on, handle: PlayerHandle::new(tx, notify.clone(), total_bytes_pending_send.clone()) }) {
             anyhow::bail!("failed to send player connection message: {e:?}");
         }
 
@@ -277,6 +281,7 @@ async fn connect_to_server_and_run_proxy(
             shutdown_rx.clone(),
             player_id_on,
             rx,
+            notify,
             total_bytes_pending_send,
             server_sender.clone(),
             connection_tx.clone(),
@@ -352,7 +357,7 @@ where
     }
 
     fn handle_player_connection_message(&mut self, message: PlayerConnectionMessage) {
-        match dbg!(message) {
+        match message {
             PlayerConnectionMessage::AddPlayer { stream, handle } => {
                 if self.egress.egress.player_registry.insert(stream, handle).is_some() {
                     error!("player connection message inserted another player with id {stream:?} but a player with the same id is already connected");

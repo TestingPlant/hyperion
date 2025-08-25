@@ -3,6 +3,7 @@ use std::{collections::HashSet, time::SystemTime};
 use bvh::{Aabb, Bvh, Data, Point};
 use bytes::Bytes;
 use glam::I16Vec2;
+use rayon::prelude::*;
 use hyperion_proto::ArchivedServerToProxyMessage;
 use rustc_hash::FxHashMap;
 use tracing::{debug, error, warn};
@@ -340,13 +341,13 @@ impl BufferedEgress {
                     Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
                 let Ok(exclude) = rkyv::deserialize::<u64, !>(&packet.exclude);
 
-                for (&stream, player) in &self.egress.player_registry {
+                self.egress.player_registry.par_iter_mut().for_each(|(&stream, player)| {
                     if !player.can_receive_broadcasts() || stream == exclude {
-                        continue;
+                        return;
                     }
 
-                    self.egress.unicast(stream, data.clone());
-                }
+                    player.send_shared(data.clone());
+                });
             }
             ArchivedServerToProxyMessage::BroadcastLocal(packet) => {
                 let Ok(center_x) = rkyv::deserialize::<i16, !>(&packet.center.x);

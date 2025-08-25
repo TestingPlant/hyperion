@@ -1,10 +1,11 @@
 [[bench]]
 harness = false
-name = "packet_channel"
+name = "delimited"
 
 [dependencies]
 arc-swap = { workspace = true }
 bevy = { workspace = true }
+bytes = { workspace = true }
 more-asserts = { workspace = true }
 valence_protocol = { workspace = true }
 
