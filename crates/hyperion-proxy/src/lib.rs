@@ -20,13 +20,17 @@ use std::{
     fmt::Debug,
     path::Path,
     sync::{Arc, atomic::AtomicUsize},
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
-use anyhow::Context;
+use anyhow::Context as _;
 use colored::Colorize;
 use hyperion_proto::ArchivedServerToProxyMessage;
 use rustls::{RootCertStore, client::ClientConfig};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
+use pin_project_lite::pin_project;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
     net::{TcpStream, ToSocketAddrs},
@@ -216,6 +220,7 @@ async fn connect_to_server_and_run_proxy(
                 loop {
                     tokio::select! {
                     _ = shutdown_rx.wait_for(Option::is_some) => return,
+                    // TODO handle_next is not cancel safe
                     result = handler.handle_next() => {
                         match result {
                             Ok(()) => {},
@@ -315,12 +320,22 @@ where
         }
     }
 
-    // #[instrument(level = "info", skip_all, name = "ServerReader::next")]
     pub async fn handle_next(&mut self) -> anyhow::Result<()> {
+        let (result, yielded) = FutureTracker::new(self.handle_next_inner()).await;
+        if yielded {
+            self.egress.ticks_elapsed_since_yield = 0;
+        }
+        result
+    }
+
+    async fn handle_next_inner(&mut self) -> anyhow::Result<()> {
         let len = self.read_len().await?;
         let len = usize::try_from(len).context("Failed to convert len to usize")?;
 
-        debug_assert!(len <= 1_000_000);
+        if len > 1_000_000 {
+            dbg!(len);
+        }
+        assert!(len <= 1_000_000);
 
         trace!("Received packet of length {len}");
 
@@ -368,6 +383,39 @@ where
                     error!("player connection message attempted to remove {stream:?} which does not exist");
                 }
             },
+        }
+    }
+}
+
+pin_project! {
+    /// Tracks whether a future ever returns `Poll::Pending`
+    struct FutureTracker<F> {
+        #[pin]
+        future: F,
+        yielded: bool
+    }
+}
+
+impl<F> FutureTracker<F> {
+    fn new(future: F) -> Self {
+        Self {
+            future,
+            yielded: false,
+        }
+    }
+}
+
+impl<F> Future for FutureTracker<F> where F: Future {
+    type Output = (F::Output, bool);
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.future.poll(cx) {
+            Poll::Ready(value) => Poll::Ready((value, *this.yielded)),
+            Poll::Pending => {
+                *this.yielded = true;
+                Poll::Pending
+            }
         }
     }
 }

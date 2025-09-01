@@ -3,8 +3,10 @@ arrayvec = { workspace = true }
 colored = { workspace = true }
 kanal = { workspace = true }
 packet-channel = { workspace = true }
+pin-project-lite = { workspace = true }
 rayon = { workspace = true }
 rkyv = { workspace = true }
+roaring = { workspace = true }
 rustc-hash = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }

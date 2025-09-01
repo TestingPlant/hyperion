@@ -1564,7 +1564,7 @@ checksum = "1628fb46dfa0b37568d12e5edd512553eccf6a22a78e8bde00bb4aed84d5bdbf"
 [[package]]
 name = "bvh"
 version = "0.1.0"
-source = "git+https://github.com/TestingPlant/bvh-data#9bffb03a4b894a7884c9ec0da986bdde732ac704"
+source = "git+https://github.com/TestingPlant/bvh-data#02f0ac2321f0e125bfec425acfc6619ecbbd2eb7"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -3869,8 +3869,10 @@ dependencies = [
  "kanal",
  "more-asserts",
  "packet-channel",
+ "pin-project-lite",
  "rayon",
  "rkyv",
+ "roaring",
  "rustc-hash 2.1.1",
  "rustls",
  "rustls-pki-types",

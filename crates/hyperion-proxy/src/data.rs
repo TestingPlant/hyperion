@@ -1,11 +1,15 @@
-use std::sync::{
+use std::{sync::{
     Arc,
     atomic::{self, AtomicBool, AtomicUsize},
-};
+},
+    collections::HashSet,}
+;
 
 use bytes::Bytes;
+use glam::I16Vec2;
 use tokio::sync::Notify;
 use slotmap::{KeyData, new_key_type};
+use roaring::RoaringBitmap;
 
 /// Maximum total size of pending clientbound packets in a player's communication channel.
 /// If this limit is exceeded, the player will be disconnected to prevent
@@ -45,11 +49,15 @@ pub struct PlayerHandle {
 
     /// Total amount of bytes that are waiting to be sent
     total_bytes_pending_send: Arc<AtomicUsize>,
+
+    pub(crate) position: I16Vec2,
+
+    pub(crate) subscribed_channels: RoaringBitmap,
 }
 
 impl PlayerHandle {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         writer: packet_channel::raw::Sender,
         notify: Arc<Notify>,
         total_bytes_pending_send: Arc<AtomicUsize>,
@@ -59,6 +67,8 @@ impl PlayerHandle {
             notify,
             can_receive_broadcasts: AtomicBool::new(false),
             total_bytes_pending_send,
+            position: I16Vec2::ZERO,
+            subscribed_channels: RoaringBitmap::new(),
         }
     }
 
