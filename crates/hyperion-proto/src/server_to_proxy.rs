@@ -108,9 +108,9 @@ pub struct Shutdown {
     pub stream: u64,
 }
 
-/// Stores the current time on the game server at the time of sending this message. This is useful
-/// to determine if a proxy is running slow and cannot keep up with the rate of server to proxy
-/// messages
+/// Stores the current time on the game server at the time of sending this message. This should be
+/// sent once per game tick. This is useful to determine if a proxy is running slow and cannot keep
+/// up with the rate of server to proxy messages.
 #[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq, Debug)]
 pub struct CurrentTime {
     pub seconds_since_epoch: u64,

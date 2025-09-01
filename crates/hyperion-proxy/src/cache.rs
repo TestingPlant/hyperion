@@ -124,6 +124,7 @@ impl BufferedEgress {
         let mut num_unsub = 0;
 
         for (&stream, player) in &mut self.egress.player_registry {
+            let player = player.get_mut();
             let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
             // let mut channels_below_subscribe_radius = RoaringBitmap::new();
 //            for slice in channel_bvh.get_in(Aabb::new(
@@ -387,7 +388,7 @@ impl BufferedEgress {
                         continue;
                     };
 
-                    player.position = position;
+                    player.get_mut().position = position;
                 }
             }
             ArchivedServerToProxyMessage::AddChannel(packet) => {
@@ -487,6 +488,8 @@ impl BufferedEgress {
                         continue;
                     };
 
+                    let player = player.get_mut();
+
                     // TODO use max pending bytes
                     player.send_shared(data.clone());
                     player.subscribed_channels.insert(channel_id);
@@ -522,6 +525,7 @@ impl BufferedEgress {
                 let Ok(exclude) = rkyv::deserialize::<u64, !>(&packet.exclude);
 
                 self.egress.player_registry.par_iter_mut().for_each(|(&stream, player)| {
+                    let player = player.get_mut();
                     if !player.can_receive_broadcasts() || stream == exclude {
                         return;
                     }
@@ -543,34 +547,55 @@ impl BufferedEgress {
                 let aabb = Aabb::new(min, max);
 
                 let slices = self.player_bvh.get_in(aabb);
+                let (_, streams) = self.player_bvh.inner();
 
-                for slice in slices {
-                    let (_, streams) = self.player_bvh.inner();
+//                for slice in slices {
+//                    let start = slice.start as usize;
+//                    let end = slice.end as usize;
+//
+//                    let streams = &streams[start..end];
+//                    for &stream in streams {
+//                        if stream == player_id_to_exclude {
+//                            continue;
+//                        }
+//
+//                        self.egress.unicast(stream, data.clone());
+//                    }
+//                }
+//                unsafe {
+//                    self.egress.broadcast(slices.into_par_iter().flat_map(|slice| {
+//                        let start = slice.start as usize;
+//                        let end = slice.end as usize;
+//
+//                        streams[start..end].par_iter()
+//                    }).copied().filter(|stream| *stream != player_id_to_exclude),
+//                    data
+//                    );
+//                }
+                unsafe {
+                    self.egress.broadcast(slices.into_iter().flat_map(|slice| {
+                        let start = slice.start as usize;
+                        let end = slice.end as usize;
 
-                    let start = slice.start as usize;
-                    let end = slice.end as usize;
-
-                    let streams = &streams[start..end];
-                    for &stream in streams {
-                        if stream == player_id_to_exclude {
-                            continue;
-                        }
-
-                        self.egress.unicast(stream, data.clone());
-                    }
+                        streams[start..end].iter()
+                    }).copied().filter(|stream| *stream != player_id_to_exclude).par_bridge(),
+                    data
+                    );
                 }
             }
             ArchivedServerToProxyMessage::BroadcastChannel(packet) => {
-//                let exclude = u64::from(packet.exclude);
-//                let data =
-//                    Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
-//
-//                let Some(channel) = self.channel_manager.channels.get(&packet.channel_id.into())
-//                else {
-//                    error!("server sent BroadcastChannel for a channel that does not exist");
-//                    return;
-//                };
-//
+                let exclude = u64::from(packet.exclude);
+                let data =
+                    Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
+
+                let Some(channel) = self.channel_manager.channels.get(&packet.channel_id.into())
+                else {
+                    error!("server sent BroadcastChannel for a channel that does not exist");
+                    return;
+                };
+
+                // SAFETY: subscribed_connections is a HashSet which guarantees unique stream ids
+                unsafe { self.egress.broadcast(channel.subscribed_connections.par_iter().copied().filter(|stream| *stream != exclude), data) };
 //                for &stream in &channel.subscribed_connections {
 //                    if stream == exclude {
 //                        continue;
@@ -607,10 +632,10 @@ impl BufferedEgress {
                 }
 
                 let delay = current_seconds_since_epoch - pkt.seconds_since_epoch;
-                if delay > 5 {
+                if delay > 5 || self.ticks_elapsed_since_yield > 5 {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
-                         server to proxy messages and {} game ticks have elapsed since the server to proxy task has yielded execution (higher is worse)",
+                         server to proxy messages and {} game ticks have elapsed since the server to proxy task has yielded execution",
                         self.ticks_elapsed_since_yield,
                     );
                 }

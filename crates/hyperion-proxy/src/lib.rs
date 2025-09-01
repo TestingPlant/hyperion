@@ -3,6 +3,7 @@
 #![feature(let_chains)]
 #![feature(never_type)]
 #![feature(stmt_expr_attributes)]
+#![feature(sync_unsafe_cell)]
 #![feature(gen_blocks)]
 #![allow(
     clippy::redundant_pub_crate,
@@ -23,6 +24,7 @@ use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
+    cell::SyncUnsafeCell
 };
 
 use anyhow::Context as _;
@@ -324,7 +326,14 @@ where
         let (result, yielded) = FutureTracker::new(self.handle_next_inner()).await;
         if yielded {
             self.egress.ticks_elapsed_since_yield = 0;
+        } else if self.egress.ticks_elapsed_since_yield % 20 == 0 {
+            // Forcibly yield execution so other tasks can run. This does not reset
+            // ticks_elapsed_since_yield since it should measure the ticks elapsed since the read
+            // from the buffered reader has yielded, since if that read never yields, it's an
+            // indication that the task is behind on processing messages.
+            tokio::task::yield_now().await;
         }
+
         result
     }
 
@@ -374,7 +383,7 @@ where
     fn handle_player_connection_message(&mut self, message: PlayerConnectionMessage) {
         match message {
             PlayerConnectionMessage::AddPlayer { stream, handle } => {
-                if self.egress.egress.player_registry.insert(stream, handle).is_some() {
+                if self.egress.egress.player_registry.insert(stream, SyncUnsafeCell::new(handle)).is_some() {
                     error!("player connection message inserted another player with id {stream:?} but a player with the same id is already connected");
                 }
             },
@@ -397,7 +406,7 @@ pin_project! {
 }
 
 impl<F> FutureTracker<F> {
-    fn new(future: F) -> Self {
+    const fn new(future: F) -> Self {
         Self {
             future,
             yielded: false,

@@ -139,13 +139,13 @@ pub fn initiate_player_connection(
                 slices.push(IoSlice::new(slice));
             }
 
+            std::hint::black_box(&slices);
             if let Err(e) = socket_writer.write_vectored_all(&mut slices).await {
                 warn!("Error writing packets to player: {e:?}");
                 return;
             }
             // tracing::info!("sent {total_bytes} ({} vectors)", slices.len());
             total_bytes_pending_send.fetch_sub(total_bytes, atomic::Ordering::Relaxed);
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     });
 
