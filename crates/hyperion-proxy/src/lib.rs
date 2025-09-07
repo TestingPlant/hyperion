@@ -216,38 +216,43 @@ async fn connect_to_server_and_run_proxy(
 
     let mut handler = IngressHandler::new(BufReader::new(server_read), egress);
 
+    // TODO go back to kanal
     let (connection_tx, mut connection_rx) = tokio::sync::mpsc::unbounded_channel();
 
     tokio::spawn({
         let mut shutdown_rx = shutdown_rx.clone();
         async move {
-                loop {
+                'handler: loop {
                     tokio::select! {
-                    _ = shutdown_rx.wait_for(Option::is_some) => return,
-                    // TODO handle_next is not cancel safe
-                    result = handler.handle_next() => {
-                        match result {
-                            Ok(()) => {},
-                            Err(e) => {
-                                error!(
-                                    "Error reading next packet: {e:?}. Are you connected to a valid \
-                                     hyperion server? If you are connected to a vanilla server, \
-                                     hyperion-proxy will not work."
-                                );
-                                break;
+                        _ = shutdown_rx.wait_for(Option::is_some) => return,
+                        result = handler.handle_next() => {
+                            match result {
+                                Ok(()) => {},
+                                Err(e) => {
+                                    error!(
+                                        "Error reading next packet: {e:?}. Are you connected to a valid \
+                                         hyperion server? If you are connected to a vanilla server, \
+                                         hyperion-proxy will not work."
+                                    );
+                                    break;
+                                }
                             }
-                        }
-                    },
-                    message = connection_rx.recv() => {
-                        match message {
-                            Some(message) => handler.handle_player_connection_message(message),
-                            None => {
+                        },
+                    }
+
+                    // handle_next above is not cancel safe, so handling player connection messages
+                    // cannot be done in the select above.
+                    loop {
+                        use tokio::sync::mpsc::error::TryRecvError;
+                        match connection_rx.try_recv() {
+                            Ok(message) => handler.handle_player_connection_message(message),
+                            Err(TryRecvError::Empty) => { break; }
+                            Err(TryRecvError::Disconnected) => {
                                 error!("Error reading from player connection message channel: channel closed");
-                                break;
+                                break 'handler;
                             }
                         }
-                    },
-                }
+                    }
                 }
 
                 debug!("Sending shutdown to all players");

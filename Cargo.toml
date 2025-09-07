@@ -252,7 +252,7 @@ features = ['full']
 version = '0.7.15'
 
 [workspace.dependencies.tracing]
-features = ['release_max_level_info']
+# features = ['release_max_level_info']
 version = '0.1.40'
 
 [workspace.dependencies.tracing-subscriber]

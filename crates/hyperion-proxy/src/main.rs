@@ -100,10 +100,12 @@ fn setup_logging() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    console_subscriber::init();
+
     // Load .env file if available
     dotenvy::dotenv().ok();
 
-    setup_logging();
+    // setup_logging();
 
     // Try to load params from environment variables
     let params = match envy::prefixed("HYPERION_PROXY_").from_env::<Params>() {

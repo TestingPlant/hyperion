@@ -45,6 +45,15 @@ impl Data for Player {
     }
 }
 
+pub struct ChannelSubscriptionDelta {
+    /// List of connection ids that are pending a subscription to this channel that were not
+    /// previously pending a connection
+    new_pending_connections: Vec<u64>,
+
+    /// List of connection ids that should be unsubscribed from this channel
+    unsubscribed_connections: FxHashSet<u64>
+}
+
 pub struct Channel {
     /// List of connection ids that are pending a subscription to this channel
     pending_connections: FxHashSet<u64>,
@@ -73,6 +82,7 @@ pub struct BufferedEgress {
     pub(crate) ticks_elapsed_since_yield: u64,
     total_time: std::time::Duration,
     total_time_in_write: std::time::Duration,
+    behind: bool,
 }
 
 impl BufferedEgress {
@@ -86,12 +96,13 @@ impl BufferedEgress {
             ticks_elapsed_since_yield: 0,
             total_time: std::time::Duration::from_secs(0),
             total_time_in_write: std::time::Duration::from_secs(0),
+            behind: false,
         }
     }
 
     pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
         // TODO remove mod
-        if self.ticks_elapsed_since_yield % 20 != 0 {
+        if self.ticks_elapsed_since_yield % 20 != 0 || self.behind {
             return;
         }
 
@@ -127,6 +138,7 @@ impl BufferedEgress {
         let mut num_sub = 0;
         let mut num_unsub = 0;
 
+        let mut total_psub = std::time::Duration::from_secs(0);
         let mut total_sub = std::time::Duration::from_secs(0);
         let mut total_unsub = std::time::Duration::from_secs(0);
         let mut total_request_subscribes = std::time::Duration::from_secs(0);
@@ -199,11 +211,12 @@ impl BufferedEgress {
                     requested_subscriptions
                         .push((channel_id, channel.cached_subscribe_packets.is_some()));
                 }
+                total_psub += start3.elapsed();
                 let new = channel.pending_connections.insert(stream);
+                total_sub += start3.elapsed();
                 if new {
                     num_sub += 1;
                 }
-                total_sub += start3.elapsed();
             }
 
             for channel_to_unsubscribe in
@@ -255,8 +268,8 @@ impl BufferedEgress {
             });
             total_request_subscribes += start3.elapsed();
         }
-        tracing::info!(
-            "updated channel positions in {:?} ({total_sub:?} sub {total_unsub:?} unsub \
+        tracing::warn!(
+            "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub {total_unsub:?} unsub \
              {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and {num_unsub} unsubscribed",
             start.elapsed()
         );
@@ -680,6 +693,7 @@ impl BufferedEgress {
                 }
 
                 let delay = current_seconds_since_epoch - pkt.seconds_since_epoch;
+                self.behind = delay >= 8;
                 if delay > 5 || self.ticks_elapsed_since_yield > 5 {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
