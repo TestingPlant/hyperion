@@ -15,14 +15,13 @@ use hyperion_proto::{
 use rkyv::ser::allocator::Arena;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite},
-    task::JoinHandle,
     sync::Notify,
+    task::JoinHandle,
 };
-use tracing::{info, error, info_span, instrument, warn};
+use tracing::{error, info, info_span, instrument, warn};
 
 use crate::{
-    PlayerConnectionMessage,
-    ShutdownType, server_sender::ServerSender, util::AsyncWriteVectoredExt,
+    PlayerConnectionMessage, ShutdownType, server_sender::ServerSender, util::AsyncWriteVectoredExt,
 };
 
 /// Default buffer size for reading player packets, set to 8 KiB.
@@ -124,7 +123,10 @@ pub fn initiate_player_connection(
 
             // Try reading as much data as possible
             while bytes.remaining_capacity() > 0 {
-                let Ok(packet) = incoming_packet_receiver.try_recv() else { open = false; break; };
+                let Ok(packet) = incoming_packet_receiver.try_recv() else {
+                    open = false;
+                    break;
+                };
                 let Some(packet) = packet else {
                     break;
                 };
@@ -192,7 +194,9 @@ pub fn initiate_player_connection(
             }
         }
 
-        if let Err(e) = connection_tx.send(PlayerConnectionMessage::RemovePlayer { stream: player_id }) {
+        if let Err(e) =
+            connection_tx.send(PlayerConnectionMessage::RemovePlayer { stream: player_id })
+        {
             error!("failed to send player connection message upon player disconnect: {e:?}");
         }
     })

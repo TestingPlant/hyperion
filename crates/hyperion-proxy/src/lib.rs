@@ -18,21 +18,21 @@
 )]
 
 use std::{
+    cell::SyncUnsafeCell,
     fmt::Debug,
-    path::Path,
-    sync::{Arc, atomic::AtomicUsize},
     future::Future,
+    path::Path,
     pin::Pin,
+    sync::{Arc, atomic::AtomicUsize},
     task::{Context, Poll},
-    cell::SyncUnsafeCell
 };
 
 use anyhow::Context as _;
 use colored::Colorize;
 use hyperion_proto::ArchivedServerToProxyMessage;
+use pin_project_lite::pin_project;
 use rustls::{RootCertStore, client::ClientConfig};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
-use pin_project_lite::pin_project;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, BufReader},
     net::{TcpStream, ToSocketAddrs},
@@ -80,11 +80,13 @@ enum ShutdownType {
 enum PlayerConnectionMessage {
     AddPlayer {
         stream: u64,
-        handle: PlayerHandle
+        writer: packet_channel::raw::Sender,
+        notify: Arc<Notify>,
+        total_bytes_pending_send: Arc<AtomicUsize>,
     },
     RemovePlayer {
         stream: u64,
-    }
+    },
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
@@ -279,7 +281,12 @@ async fn connect_to_server_and_run_proxy(
         // todo: some SlotMap like thing
         debug!("got player with id {player_id_on:?}");
 
-        if let Err(e) = connection_tx.send(PlayerConnectionMessage::AddPlayer { stream: player_id_on, handle: PlayerHandle::new(tx, notify.clone(), total_bytes_pending_send.clone()) }) {
+        if let Err(e) = connection_tx.send(PlayerConnectionMessage::AddPlayer {
+            stream: player_id_on,
+            writer: tx,
+            notify: notify.clone(),
+            total_bytes_pending_send: total_bytes_pending_send.clone(),
+        }) {
             anyhow::bail!("failed to send player connection message: {e:?}");
         }
 
@@ -382,16 +389,19 @@ where
 
     fn handle_player_connection_message(&mut self, message: PlayerConnectionMessage) {
         match message {
-            PlayerConnectionMessage::AddPlayer { stream, handle } => {
-                if self.egress.egress.player_registry.insert(stream, SyncUnsafeCell::new(handle)).is_some() {
-                    error!("player connection message inserted another player with id {stream:?} but a player with the same id is already connected");
-                }
-            },
+            PlayerConnectionMessage::AddPlayer {
+                stream,
+                writer,
+                notify,
+                total_bytes_pending_send,
+            } => {
+                self.egress
+                    .egress
+                    .add_player(stream, writer, notify, total_bytes_pending_send);
+            }
             PlayerConnectionMessage::RemovePlayer { stream } => {
-                if !self.egress.egress.player_registry.remove(&stream).is_some() {
-                    error!("player connection message attempted to remove {stream:?} which does not exist");
-                }
-            },
+                self.egress.egress.remove_player(stream);
+            }
         }
     }
 }
@@ -414,7 +424,10 @@ impl<F> FutureTracker<F> {
     }
 }
 
-impl<F> Future for FutureTracker<F> where F: Future {
+impl<F> Future for FutureTracker<F>
+where
+    F: Future,
+{
     type Output = (F::Output, bool);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

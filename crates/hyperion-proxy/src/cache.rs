@@ -1,15 +1,15 @@
-use std::{collections::HashSet, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 use bvh::{Aabb, Bvh, Data, Point};
 use bytes::Bytes;
 use glam::I16Vec2;
+use hyperion_proto::{ArchivedServerToProxyMessage, ArchivedUpdateChannelPositions};
 use rayon::prelude::*;
-use hyperion_proto::{ArchivedUpdateChannelPositions, ArchivedServerToProxyMessage};
 use roaring::RoaringBitmap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, error, warn};
 
-use crate::egress::Egress;
+use crate::egress::{Egress, EgressInstruction};
 
 /// Maximum chunk distance between a packet's center and a player for a local broadcast to be sent to
 /// that player
@@ -47,10 +47,10 @@ impl Data for Player {
 
 pub struct Channel {
     /// List of connection ids that are pending a subscription to this channel
-    pending_connections: HashSet<u64>,
+    pending_connections: FxHashSet<u64>,
 
     /// List of connection ids that are currently subscribed to this channel
-    subscribed_connections: HashSet<u64>,
+    subscribed_connections: Arc<FxHashSet<u64>>,
 
     cached_subscribe_packets: Option<Bytes>,
     unsubscribe_packets: Bytes,
@@ -71,6 +71,8 @@ pub struct BufferedEgress {
     pub(crate) egress: Egress,
     player_bvh: Bvh<Vec<u64>>,
     pub(crate) ticks_elapsed_since_yield: u64,
+    total_time: std::time::Duration,
+    total_time_in_write: std::time::Duration,
 }
 
 impl BufferedEgress {
@@ -82,11 +84,14 @@ impl BufferedEgress {
             egress,
             player_bvh: Bvh::default(),
             ticks_elapsed_since_yield: 0,
+            total_time: std::time::Duration::from_secs(0),
+            total_time_in_write: std::time::Duration::from_secs(0),
         }
     }
 
     pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
-        if self.ticks_elapsed_since_yield != 0 {
+        // TODO remove mod
+        if self.ticks_elapsed_since_yield % 20 != 0 {
             return;
         }
 
@@ -97,8 +102,7 @@ impl BufferedEgress {
             let channel_id = update.channel_id.into();
             let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
                 error!(
-                    "server sent UpdateChannelPositions with an invalid channel id \
-                             {channel_id}"
+                    "server sent UpdateChannelPositions with an invalid channel id {channel_id}"
                 );
                 continue;
             };
@@ -108,73 +112,83 @@ impl BufferedEgress {
             channel.chunk_position = position;
         }
         // TODO rename Player struct to smth more generic
-        let mut channels = self.channel_manager.channels
+        let mut channels = self
+            .channel_manager
+            .channels
             .iter()
-            .map(|(&channel_id, channel)| {
-                Player {
-                    stream: channel_id as u64,
-                    chunk_position: channel.chunk_position,
-                }
+            .map(|(&channel_id, channel)| Player {
+                stream: channel_id as u64,
+                chunk_position: channel.chunk_position,
             })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
         let channel_bvh = Bvh::build(&mut channels, ());
         let mut requested_subscriptions = Vec::new();
         let mut num_sub = 0;
         let mut num_unsub = 0;
 
+        let mut total_sub = std::time::Duration::from_secs(0);
+        let mut total_unsub = std::time::Duration::from_secs(0);
+        let mut total_request_subscribes = std::time::Duration::from_secs(0);
+
         for (&stream, player) in &mut self.egress.player_registry {
             let player = player.get_mut();
             let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
             // let mut channels_below_subscribe_radius = RoaringBitmap::new();
-//            for slice in channel_bvh.get_in(Aabb::new(
-//                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-//                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-//            )) {
-//                let (_, channel_ids) = channel_bvh.inner();
-//
-//                let start = slice.start as usize;
-//                let end = slice.end as usize;
-//
-//                let channel_ids = &channel_ids[start..end];
-//
-//                channels_below_unsubscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
-//                // channels_below_subscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
-//
-////                for &channel_id in channel_ids {
-////                    // TODO store u32s directly
-////                    let channel_id = channel_id as u32;
-////
-////                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
-////                        error!("bvh contains invalid channel");
-////                        continue;
-////                    };
-////
-////                    // TODO shoild this be a separate bvh query?
-////                    let within_subscribe_radius = (channel.chunk_position - player.position).abs().max_element() <= SUBSCRIBE_RADIUS;
-////
-////                    if within_subscribe_radius {
-////                        channels_below_subscribe_radius.insert(channel_id);
-////                    }
-////                }
-//            }
+            //            for slice in channel_bvh.get_in(Aabb::new(
+            //                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+            //                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+            //            )) {
+            //                let (_, channel_ids) = channel_bvh.inner();
+            //
+            //                let start = slice.start as usize;
+            //                let end = slice.end as usize;
+            //
+            //                let channel_ids = &channel_ids[start..end];
+            //
+            //                channels_below_unsubscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+            //                // channels_below_subscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+            //
+            ////                for &channel_id in channel_ids {
+            ////                    // TODO store u32s directly
+            ////                    let channel_id = channel_id as u32;
+            ////
+            ////                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+            ////                        error!("bvh contains invalid channel");
+            ////                        continue;
+            ////                    };
+            ////
+            ////                    // TODO shoild this be a separate bvh query?
+            ////                    let within_subscribe_radius = (channel.chunk_position - player.position).abs().max_element() <= SUBSCRIBE_RADIUS;
+            ////
+            ////                    if within_subscribe_radius {
+            ////                        channels_below_subscribe_radius.insert(channel_id);
+            ////                    }
+            ////                }
+            //            }
 
             let (_, channel_ids) = channel_bvh.inner();
 
-            channels_below_unsubscribe_radius.extend(channel_bvh.get_in(Aabb::new(
-                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-            )).into_iter().flat_map(|slice| {
-                let start = slice.start as usize;
-                let end = slice.end as usize;
+            channels_below_unsubscribe_radius.extend(
+                channel_bvh
+                    .get_in(Aabb::new(
+                        player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                        player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                    ))
+                    .into_iter()
+                    .flat_map(|slice| {
+                        let start = slice.start as usize;
+                        let end = slice.end as usize;
 
-                let channel_ids = &channel_ids[start..end];
+                        let channel_ids = &channel_ids[start..end];
 
-                channel_ids.iter().map(|id| *id as u32)
-            }));
+                        channel_ids.iter().map(|id| *id as u32)
+                    }),
+            );
             let channels_below_subscribe_radius = &channels_below_unsubscribe_radius;
 
             for channel_id in channels_below_subscribe_radius - &player.subscribed_channels {
+                let start3 = std::time::Instant::now();
                 // This channel is below the subscribe radius but is not currently subscribed. Subscribe to the channel
                 let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
                     error!("bvh contains invalid channel");
@@ -182,19 +196,25 @@ impl BufferedEgress {
                 };
                 if channel.pending_connections.is_empty() {
                     // Request subscribe packets from the server
-                    requested_subscriptions.push((
-                            channel_id,
-                            channel.cached_subscribe_packets.is_some(),
-                    ));
+                    requested_subscriptions
+                        .push((channel_id, channel.cached_subscribe_packets.is_some()));
                 }
                 let new = channel.pending_connections.insert(stream);
                 if new {
                     num_sub += 1;
                 }
+                total_sub += start3.elapsed();
             }
 
-            for channel_to_unsubscribe in &player.subscribed_channels - channels_below_unsubscribe_radius {
-                let Some(channel) = self.channel_manager.channels.get_mut(&channel_to_unsubscribe) else {
+            for channel_to_unsubscribe in
+                &player.subscribed_channels - channels_below_unsubscribe_radius
+            {
+                let start3 = std::time::Instant::now();
+                let Some(channel) = self
+                    .channel_manager
+                    .channels
+                    .get_mut(&channel_to_unsubscribe)
+                else {
                     error!("could not find channel to unsubscribe");
                     continue;
                 };
@@ -203,13 +223,22 @@ impl BufferedEgress {
 
                 // TODO removing one at a time if probabbly inefficient
                 player.subscribed_channels.remove(channel_to_unsubscribe);
-                let was_subscribed = channel.subscribed_connections.remove(&stream);
+                let was_subscribed =
+                    Arc::make_mut(&mut channel.subscribed_connections).remove(&stream);
                 assert!(was_subscribed);
-                player.send_shared(channel.unsubscribe_packets.clone());
+                self.egress
+                    .egress_sender
+                    .send(EgressInstruction::Unicast {
+                        stream,
+                        data: channel.unsubscribe_packets.clone(),
+                    })
+                    .unwrap();
+                total_unsub += start3.elapsed();
             }
         }
 
         if !requested_subscriptions.is_empty() {
+            let start3 = std::time::Instant::now();
             let request = rkyv::to_bytes::<rkyv::rancor::Error>(
                 &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
                     hyperion_proto::RequestSubscribeChannelPackets {
@@ -217,144 +246,150 @@ impl BufferedEgress {
                     },
                 ),
             )
-                .unwrap();
+            .unwrap();
             let server_sender = self.egress.server_sender.clone();
             tokio::spawn(async move {
                 if let Err(e) = server_sender.send(request).await {
                     error!("failed to send request subscribe channel packets: {e}");
                 }
             });
+            total_request_subscribes += start3.elapsed();
         }
-        tracing::info!("updated channel positions in {:?} - {num_sub} new subscriptions and {num_unsub} unsubscribed", start.elapsed());
+        tracing::info!(
+            "updated channel positions in {:?} ({total_sub:?} sub {total_unsub:?} unsub \
+             {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and {num_unsub} unsubscribed",
+            start.elapsed()
+        );
     }
 
-//    pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
-//        let start = std::time::Instant::now();
-//        let mut requested_subscriptions = Vec::new();
-//
-//        // Update channel positions
-//        for update in packet.updates.get() {
-//            let channel_id = update.channel_id.into();
-//            let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
-//                error!(
-//                    "server sent UpdateChannelPositions with an invalid channel id \
-//                             {channel_id}"
-//                );
-//                continue;
-//            };
-//
-//            let Ok(position) = rkyv::deserialize::<_, !>(&update.position);
-//            let position = I16Vec2::from(position);
-//            channel.chunk_position = position;
-//        }
-//
-//        // Determine which players to unsubscribe and subscribe to each channel. This is
-//        // done in a separate loop to also calculate this info for channels who didn't update
-//        // their position
-//        for (&channel_id, channel) in &mut self.channel_manager.channels {
-//            // The separation between the checks for which players should remain subscribed and the checks for which unsubscribed players should subscribe with separate radii for each check exists so that if a player repeatedly crosses the same chunk boundary, the player won't subscribe and unsubscribe from the same channels repeatedly. Avoiding this issue helps reduce network and CPU usage.
-//
-//            let mut should_remain_subscribed = HashSet::new();
-//
-//            // Determine which subscribed players should remain subscribed to this channel. All players below the unsubscribe radius can remain subscribed to this
-//            // channel.
-//            for slice in self.player_bvh.get_in(Aabb::new(
-//                    channel.chunk_position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-//                    channel.chunk_position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-//            )) {
-//                let (_, streams) = self.player_bvh.inner();
-//
-//                let start = slice.start as usize;
-//                let end = slice.end as usize;
-//
-//                let streams = &streams[start..end];
-//                for &stream in streams {
-//                    // This steam is below the unsubscribe radius...
-//                    if channel.subscribed_connections.contains(&stream) {
-//                        // ... and it is already subscribed, so it can remain subscribed to this channel
-//                        should_remain_subscribed.insert(stream);
-//                    }
-//                }
-//            }
-//
-//            // Determine which unsubscribed players should subscribe to this channel. All players below the subscribe radius can subscribe to this
-//            // channel.
-//            for slice in self.player_bvh.get_in(Aabb::new(
-//                    channel.chunk_position - I16Vec2::splat(SUBSCRIBE_RADIUS),
-//                    channel.chu.len()nk_position + I16Vec2::splat(SUBSCRIBE_RADIUS),
-//            )) {
-//                let (_, streams) = self.player_bvh.inner();
-//
-//                let start = slice.start as usize;
-//                let end = slice.end as usize;
-//
-//                let streams = &streams[start..end];
-//                for &stream in streams {
-//                    let Some(player) = self.egress.player_registry.get(&stream) else {
-//                        error!("bvh contains invalid stream id {stream}");
-//                        continue;
-//                    };
-//
-//                    if !player.can_receive_broadcasts() {
-//                        continue;
-//                    }
-//
-//                    // This stream should be subscribed to this channel...
-//                    if !channel.subscribed_connections.contains(&stream) {
-//                        // ... but it is not currently subscribed
-//
-//                        if channel.pending_connections.is_empty() {
-//                            // Request subscribe packets from the server
-//                            requested_subscriptions.push((
-//                                    channel_id,
-//                                    channel.cached_subscribe_packets.is_some(),
-//                            ));
-//                        }
-//                        channel.pending_connections.insert(stream);
-//                    }
-//                }
-//            }
-//
-//            if channel.subscribed_connections.len() != should_remain_subscribed.len() {
-//                channel.subscribed_connections.retain(|stream| {
-//                    let should_remain = should_remain_subscribed.contains(stream);
-//
-//                    if !should_remain {
-//                        // This stream is currently subscribed. It will be sent unsubscribe
-//                        // packets and removed from the subscribed connections set
-//                        self.egress
-//                            .unicast(*stream, channel.unsubscribe_packets.clone());
-//                        debug!("unsubscribing player {stream} from channel {channel_id}");
-//                    }
-//
-//                    should_remain
-//                });
-//            }
-//        }
-//
-//        if !requested_subscriptions.is_empty() {
-//            let request = rkyv::to_bytes::<rkyv::rancor::Error>(
-//                &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
-//                    hyperion_proto::RequestSubscribeChannelPackets {
-//                        channels: &requested_subscriptions,
-//                    },
-//                ),
-//            )
-//                .unwrap();
-//            let server_sender = self.egress.server_sender.clone();
-//            tokio::spawn(async move {
-//                if let Err(e) = server_sender.send(request).await {
-//                    error!("failed to send request subscribe channel packets: {e}");
-//                }
-//            });
-//        }
-//        tracing::info!("updated channel positions in {:?}", start.elapsed());
-//    }
+    //    pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
+    //        let start = std::time::Instant::now();
+    //        let mut requested_subscriptions = Vec::new();
+    //
+    //        // Update channel positions
+    //        for update in packet.updates.get() {
+    //            let channel_id = update.channel_id.into();
+    //            let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+    //                error!(
+    //                    "server sent UpdateChannelPositions with an invalid channel id \
+    //                             {channel_id}"
+    //                );
+    //                continue;
+    //            };
+    //
+    //            let Ok(position) = rkyv::deserialize::<_, !>(&update.position);
+    //            let position = I16Vec2::from(position);
+    //            channel.chunk_position = position;
+    //        }
+    //
+    //        // Determine which players to unsubscribe and subscribe to each channel. This is
+    //        // done in a separate loop to also calculate this info for channels who didn't update
+    //        // their position
+    //        for (&channel_id, channel) in &mut self.channel_manager.channels {
+    //            // The separation between the checks for which players should remain subscribed and the checks for which unsubscribed players should subscribe with separate radii for each check exists so that if a player repeatedly crosses the same chunk boundary, the player won't subscribe and unsubscribe from the same channels repeatedly. Avoiding this issue helps reduce network and CPU usage.
+    //
+    //            let mut should_remain_subscribed = HashSet::new();
+    //
+    //            // Determine which subscribed players should remain subscribed to this channel. All players below the unsubscribe radius can remain subscribed to this
+    //            // channel.
+    //            for slice in self.player_bvh.get_in(Aabb::new(
+    //                    channel.chunk_position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+    //                    channel.chunk_position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+    //            )) {
+    //                let (_, streams) = self.player_bvh.inner();
+    //
+    //                let start = slice.start as usize;
+    //                let end = slice.end as usize;
+    //
+    //                let streams = &streams[start..end];
+    //                for &stream in streams {
+    //                    // This steam is below the unsubscribe radius...
+    //                    if channel.subscribed_connections.contains(&stream) {
+    //                        // ... and it is already subscribed, so it can remain subscribed to this channel
+    //                        should_remain_subscribed.insert(stream);
+    //                    }
+    //                }
+    //            }
+    //
+    //            // Determine which unsubscribed players should subscribe to this channel. All players below the subscribe radius can subscribe to this
+    //            // channel.
+    //            for slice in self.player_bvh.get_in(Aabb::new(
+    //                    channel.chunk_position - I16Vec2::splat(SUBSCRIBE_RADIUS),
+    //                    channel.chu.len()nk_position + I16Vec2::splat(SUBSCRIBE_RADIUS),
+    //            )) {
+    //                let (_, streams) = self.player_bvh.inner();
+    //
+    //                let start = slice.start as usize;
+    //                let end = slice.end as usize;
+    //
+    //                let streams = &streams[start..end];
+    //                for &stream in streams {
+    //                    let Some(player) = self.egress.player_registry.get(&stream) else {
+    //                        error!("bvh contains invalid stream id {stream}");
+    //                        continue;
+    //                    };
+    //
+    //                    if !player.can_receive_broadcasts() {
+    //                        continue;
+    //                    }
+    //
+    //                    // This stream should be subscribed to this channel...
+    //                    if !channel.subscribed_connections.contains(&stream) {
+    //                        // ... but it is not currently subscribed
+    //
+    //                        if channel.pending_connections.is_empty() {
+    //                            // Request subscribe packets from the server
+    //                            requested_subscriptions.push((
+    //                                    channel_id,
+    //                                    channel.cached_subscribe_packets.is_some(),
+    //                            ));
+    //                        }
+    //                        channel.pending_connections.insert(stream);
+    //                    }
+    //                }
+    //            }
+    //
+    //            if channel.subscribed_connections.len() != should_remain_subscribed.len() {
+    //                channel.subscribed_connections.retain(|stream| {
+    //                    let should_remain = should_remain_subscribed.contains(stream);
+    //
+    //                    if !should_remain {
+    //                        // This stream is currently subscribed. It will be sent unsubscribe
+    //                        // packets and removed from the subscribed connections set
+    //                        self.egress
+    //                            .unicast(*stream, channel.unsubscribe_packets.clone());
+    //                        debug!("unsubscribing player {stream} from channel {channel_id}");
+    //                    }
+    //
+    //                    should_remain
+    //                });
+    //            }
+    //        }
+    //
+    //        if !requested_subscriptions.is_empty() {
+    //            let request = rkyv::to_bytes::<rkyv::rancor::Error>(
+    //                &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
+    //                    hyperion_proto::RequestSubscribeChannelPackets {
+    //                        channels: &requested_subscriptions,
+    //                    },
+    //                ),
+    //            )
+    //                .unwrap();
+    //            let server_sender = self.egress.server_sender.clone();
+    //            tokio::spawn(async move {
+    //                if let Err(e) = server_sender.send(request).await {
+    //                    error!("failed to send request subscribe channel packets: {e}");
+    //                }
+    //            });
+    //        }
+    //        tracing::info!("updated channel positions in {:?}", start.elapsed());
+    //    }
 
     /// Handles incoming server-to-proxy messages.
     // #[instrument(skip_all)]
     #[expect(clippy::excessive_nesting)]
     pub fn handle_packet(&mut self, message: &ArchivedServerToProxyMessage<'_>) {
+        let start = std::time::Instant::now();
         match message {
             ArchivedServerToProxyMessage::UpdatePlayerPositions(packet) => {
                 if self.ticks_elapsed_since_yield != 0 {
@@ -410,8 +445,8 @@ impl BufferedEgress {
                     self.channel_manager
                         .channels
                         .insert(packet.channel_id.into(), Channel {
-                            pending_connections: HashSet::new(),
-                            subscribed_connections: HashSet::new(),
+                            pending_connections: FxHashSet::default(),
+                            subscribed_connections: Arc::new(FxHashSet::default()),
                             cached_subscribe_packets: None,
                             unsubscribe_packets: Bytes::from(unsubscribe_packets),
                             chunk_position: position.into(),
@@ -439,10 +474,11 @@ impl BufferedEgress {
                 };
 
                 // Unsubscribe all players
-                for &stream in &channel.subscribed_connections {
-                    self.egress
-                        .unicast(stream, channel.unsubscribe_packets.clone());
-                }
+                self.egress.execute(EgressInstruction::Broadcast {
+                    streams: channel.subscribed_connections.into(),
+                    exclude: 0,
+                    data: channel.unsubscribe_packets,
+                });
             }
             ArchivedServerToProxyMessage::SubscribeChannelPackets(packet) => {
                 let exclude = u64::from(packet.exclude);
@@ -482,56 +518,47 @@ impl BufferedEgress {
                     bytes
                 };
 
-                for &stream in &channel.pending_connections {
-                    let Some(player) = self.egress.player_registry.get_mut(&stream) else {
+                let start2 = std::time::Instant::now();
+                // TODO use max pending bytes
+                channel.pending_connections.par_iter().for_each(|&stream| {
+                    let Some(player) = self.egress.player_registry.get(&stream) else {
                         error!("player not found");
-                        continue;
+                        return;
                     };
 
-                    let player = player.get_mut();
+                    // SAFETY: pending_connections is a HashSet which guarantees that each stream
+                    // id is unique
+                    let player = unsafe { &mut *player.get() };
 
-                    // TODO use max pending bytes
-                    player.send_shared(data.clone());
                     player.subscribed_channels.insert(channel_id);
-                    channel.subscribed_connections.insert(stream);
 
-                    if stream == exclude {
-                        continue;
-                    }
-
-                    // TODO exclde check messes this up
-                    debug!("subscribing player {stream} to channel {channel_id}");
-//                    let sent = self.egress.maybe_unicast(
-//                        stream,
-//                        data.clone(),
-//                        MAX_PENDING_BYTES_FOR_SUBSCRIBE,
-//                    );
-//
-//                    if sent {
-//                    }
-
+                    // TODO remove this note
                     // Note that even if the subscribe packets were not sent and a stream is not
                     // subscribed, the stream is still removed from pending connections. This
                     // allows the game server to send new subscribe packets later because the proxy
                     // will not request subscribe packets if there's already a stream in the
                     // pending connections list.
-                }
+                });
+                Arc::make_mut(&mut channel.subscribed_connections)
+                    .extend(channel.pending_connections.iter().copied());
+                self.egress.execute(EgressInstruction::Broadcast {
+                    streams: std::mem::take(&mut channel.pending_connections).into(),
+                    exclude,
+                    data,
+                });
 
-                channel.pending_connections.clear();
+                self.total_time_in_write += start2.elapsed();
             }
             ArchivedServerToProxyMessage::BroadcastGlobal(packet) => {
                 let data =
                     Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
                 let Ok(exclude) = rkyv::deserialize::<u64, !>(&packet.exclude);
 
-                self.egress.player_registry.par_iter_mut().for_each(|(&stream, player)| {
-                    let player = player.get_mut();
-                    if !player.can_receive_broadcasts() || stream == exclude {
-                        return;
-                    }
-
-                    player.send_shared(data.clone());
-                });
+                let start2 = std::time::Instant::now();
+                // TODO handle can_receive_broadcasts
+                self.egress
+                    .execute(EgressInstruction::BroadcastGlobal { exclude, data });
+                self.total_time_in_write += start2.elapsed();
             }
             ArchivedServerToProxyMessage::BroadcastLocal(packet) => {
                 let Ok(center_x) = rkyv::deserialize::<i16, !>(&packet.center.x);
@@ -549,39 +576,49 @@ impl BufferedEgress {
                 let slices = self.player_bvh.get_in(aabb);
                 let (_, streams) = self.player_bvh.inner();
 
-//                for slice in slices {
-//                    let start = slice.start as usize;
-//                    let end = slice.end as usize;
-//
-//                    let streams = &streams[start..end];
-//                    for &stream in streams {
-//                        if stream == player_id_to_exclude {
-//                            continue;
-//                        }
-//
-//                        self.egress.unicast(stream, data.clone());
-//                    }
-//                }
-//                unsafe {
-//                    self.egress.broadcast(slices.into_par_iter().flat_map(|slice| {
-//                        let start = slice.start as usize;
-//                        let end = slice.end as usize;
-//
-//                        streams[start..end].par_iter()
-//                    }).copied().filter(|stream| *stream != player_id_to_exclude),
-//                    data
-//                    );
-//                }
-                unsafe {
-                    self.egress.broadcast(slices.into_iter().flat_map(|slice| {
+                //                for slice in slices {
+                //                    let start = slice.start as usize;
+                //                    let end = slice.end as usize;
+                //
+                //                    let streams = &streams[start..end];
+                //                    for &stream in streams {
+                //                        if stream == player_id_to_exclude {
+                //                            continue;
+                //                        }
+                //
+                //                        self.egress.unicast(stream, data.clone());
+                //                    }
+                //                }
+                //                unsafe {
+                //                    self.egress.broadcast(slices.into_par_iter().flat_map(|slice| {
+                //                        let start = slice.start as usize;
+                //                        let end = slice.end as usize;
+                //
+                //                        streams[start..end].par_iter()
+                //                    }).copied().filter(|stream| *stream != player_id_to_exclude),
+                //                    data
+                //                    );
+                //                }
+                let start2 = std::time::Instant::now();
+
+                let targets = slices
+                    .into_iter()
+                    .flat_map(|slice| {
                         let start = slice.start as usize;
                         let end = slice.end as usize;
 
                         streams[start..end].iter()
-                    }).copied().filter(|stream| *stream != player_id_to_exclude).par_bridge(),
-                    data
-                    );
-                }
+                    })
+                    .copied()
+                    .collect::<FxHashSet<u64>>();
+
+                self.egress.execute(EgressInstruction::Broadcast {
+                    streams: targets.into(),
+                    exclude: player_id_to_exclude,
+                    data,
+                });
+
+                self.total_time_in_write += start2.elapsed();
             }
             ArchivedServerToProxyMessage::BroadcastChannel(packet) => {
                 let exclude = u64::from(packet.exclude);
@@ -594,26 +631,37 @@ impl BufferedEgress {
                     return;
                 };
 
-                // SAFETY: subscribed_connections is a HashSet which guarantees unique stream ids
-                unsafe { self.egress.broadcast(channel.subscribed_connections.par_iter().copied().filter(|stream| *stream != exclude), data) };
-//                for &stream in &channel.subscribed_connections {
-//                    if stream == exclude {
-//                        continue;
-//                    }
-//
-//                    self.egress.unicast(stream, data.clone());
-//                }
+                let start2 = std::time::Instant::now();
+                self.egress.execute(EgressInstruction::Broadcast {
+                    streams: channel.subscribed_connections.clone().into(),
+                    exclude,
+                    data,
+                });
+                self.total_time_in_write += start2.elapsed();
+                //                for &stream in &channel.subscribed_connections {
+                //                    if stream == exclude {
+                //                        continue;
+                //                    }
+                //
+                //                    self.egress.unicast(stream, data.clone());
+                //                }
             }
             ArchivedServerToProxyMessage::Unicast(unicast) => {
                 let data = rkyv::deserialize::<_, rkyv::rancor::Error>(&unicast.data).unwrap();
-                self.egress
-                    .unicast(unicast.stream.into(), Bytes::from(data));
+                let start2 = std::time::Instant::now();
+                self.egress.execute(EgressInstruction::Unicast {
+                    stream: unicast.stream.into(),
+                    data: Bytes::from(data),
+                });
+                self.total_time_in_write += start2.elapsed();
             }
             ArchivedServerToProxyMessage::SetReceiveBroadcasts(pkt) => {
                 self.egress.handle_set_receive_broadcasts(pkt);
             }
             ArchivedServerToProxyMessage::Shutdown(pkt) => {
-                self.egress.handle_shutdown(pkt);
+                let Ok(stream) = rkyv::deserialize::<u64, !>(&pkt.stream);
+                self.egress
+                    .execute(EgressInstruction::ShutdownPlayer { stream });
             }
             ArchivedServerToProxyMessage::CurrentTime(pkt) => {
                 let Ok(time_since_epoch) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
@@ -635,12 +683,14 @@ impl BufferedEgress {
                 if delay > 5 || self.ticks_elapsed_since_yield > 5 {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
-                         server to proxy messages and {} game ticks have elapsed since the server to proxy task has yielded execution",
-                        self.ticks_elapsed_since_yield,
+                         server to proxy messages and {} game ticks have elapsed since the server \
+                         to proxy task has yielded execution. ({:?}/{:?})",
+                        self.ticks_elapsed_since_yield, self.total_time_in_write, self.total_time,
                     );
                 }
                 self.ticks_elapsed_since_yield += 1;
             }
         }
+        self.total_time += start.elapsed();
     }
 }

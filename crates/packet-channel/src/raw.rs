@@ -26,7 +26,7 @@ enum FragmentData {
     Shared(Bytes),
 
     /// Notification that this is the last fragment and the channel is closed
-    Closed
+    Closed,
 }
 
 /// Reference counted fragment. Fragments are a fixed-size block of data which may contain zero or
@@ -63,7 +63,7 @@ impl Fragment {
         Self {
             next: ArcSwapOption::from(None),
             id,
-            data: FragmentData::Shared(data)
+            data: FragmentData::Shared(data),
         }
     }
 
@@ -71,7 +71,7 @@ impl Fragment {
         Self {
             next: ArcSwapOption::from(None),
             id,
-            data: FragmentData::Closed
+            data: FragmentData::Closed,
         }
     }
 
@@ -88,8 +88,8 @@ impl Fragment {
                     debug_assert_le!(
                         range.end,
                         read_cursor,
-                        "attempted to read bytes {range:?} which is outside of readable fragment range \
-                         (0..{read_cursor})"
+                        "attempted to read bytes {range:?} which is outside of readable fragment \
+                         range (0..{read_cursor})"
                     );
                 }
 
@@ -100,14 +100,15 @@ impl Fragment {
                 // that these bytes are ready for reading, meaning that they have been properly
                 // initialized. Once fragment bytes are initialized, they are never written to again, so
                 // creating a shared reference to them is okay.
-                let data: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), data.len()) };
+                let data: &[u8] =
+                    unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), data.len()) };
 
                 data
-            },
+            }
             FragmentData::Shared(bytes) => {
                 // SAFETY: Caller ensures that this should be in bounds
                 unsafe { bytes.get_unchecked(range) }
-            },
+            }
             FragmentData::Closed => {
                 if range.is_empty() {
                     &[]
@@ -176,8 +177,7 @@ impl Sender {
                     if data_to_send.is_empty() {
                         return;
                     }
-
-                },
+                }
                 FragmentData::Shared { .. } => {
                     // Do nothing and let the code below allocate a new fragment
                 }
@@ -186,7 +186,10 @@ impl Sender {
                 }
             }
 
-            let next_fragment = Arc::new(Fragment::new_owned_partial(self.default_fragment_size, self.current.id + 1));
+            let next_fragment = Arc::new(Fragment::new_owned_partial(
+                self.default_fragment_size,
+                self.current.id + 1,
+            ));
 
             self.current.next.store(Some(next_fragment.clone()));
             self.current = next_fragment;
@@ -201,14 +204,32 @@ impl Sender {
         self.current = next_fragment;
     }
 
+    /// Sends shared data if its size is above the threshold and copies the data if its size is less than or equal to the threshold.
+    pub fn send_maybe_shared(&mut self, data_to_send: Bytes, threshold: usize) {
+        if data_to_send.len() > threshold {
+            self.send_shared(data_to_send);
+        } else {
+            self.send(&data_to_send);
+        }
+    }
+
+    /// Sends shared data if its size is above the threshold and copies the data if its size is less than or equal to the threshold. This avoids modifying the reference count of `data_to_send` if it is below the threshold.
+    pub fn send_maybe_shared_ref(&mut self, data_to_send: &Bytes, threshold: usize) {
+        if data_to_send.len() > threshold {
+            self.send_shared(data_to_send.clone());
+        } else {
+            self.send(data_to_send);
+        }
+    }
+
     /// Create a receiver. The receiver will only receive data sent after the receiver was created.
     pub fn receiver(&self) -> Receiver {
         let read_cursor = match &self.current.data {
             FragmentData::OwnedPartial { read_cursor, .. } => read_cursor.load(Ordering::Relaxed),
             FragmentData::Shared(_) => 0,
-                FragmentData::Closed => {
-                    unreachable!()
-                }
+            FragmentData::Closed => {
+                unreachable!()
+            }
         };
 
         Receiver {
@@ -241,7 +262,9 @@ impl Receiver {
     pub fn try_recv(&mut self) -> Result<Option<InitFragment>, RecvError> {
         loop {
             if self.pending_next {
-                let Some(next) = self.current.next.load_full() else { return Ok(None) };
+                let Some(next) = self.current.next.load_full() else {
+                    return Ok(None);
+                };
                 self.current = next;
                 self.read_cursor = 0;
                 self.pending_next = false;
@@ -284,7 +307,7 @@ impl Receiver {
                         let packet_data = unsafe {
                             InitFragment::new_unchecked(
                                 self.current.clone(),
-                                self.read_cursor..fragment_read_cursor
+                                self.read_cursor..fragment_read_cursor,
                             )
                         };
                         self.read_cursor = fragment_read_cursor;
@@ -294,10 +317,13 @@ impl Receiver {
                 FragmentData::Shared(bytes) => {
                     // SAFETY: Range provided is in bounds
                     let init_fragment = unsafe {
-                        InitFragment::new_unchecked(self.current.clone(), self.read_cursor..bytes.len())
+                        InitFragment::new_unchecked(
+                            self.current.clone(),
+                            self.read_cursor..bytes.len(),
+                        )
                     };
                     self.pending_next = true;
-                    return Ok(Some(init_fragment))
+                    return Ok(Some(init_fragment));
                 }
                 FragmentData::Closed => {
                     return Err(RecvError::Closed);

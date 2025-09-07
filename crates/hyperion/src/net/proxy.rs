@@ -92,7 +92,8 @@ async fn handle_proxy_messages(
     proxy_id: ProxyId,
 ) {
     let mut reader = ProxyReader::new(read);
-    let mut player_packet_sender: FxHashMap<u64, packet_channel::delimited::Sender> = FxHashMap::default();
+    let mut player_packet_sender: FxHashMap<u64, packet_channel::delimited::Sender> =
+        FxHashMap::default();
 
     // Process packets
     loop {
