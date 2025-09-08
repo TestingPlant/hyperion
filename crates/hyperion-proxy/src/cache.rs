@@ -51,7 +51,7 @@ pub struct ChannelSubscriptionDelta {
     new_pending_connections: Vec<u64>,
 
     /// List of connection ids that should be unsubscribed from this channel
-    unsubscribed_connections: FxHashSet<u64>
+    unsubscribed_connections: FxHashSet<u64>,
 }
 
 pub struct Channel {
@@ -269,8 +269,9 @@ impl BufferedEgress {
             total_request_subscribes += start3.elapsed();
         }
         tracing::warn!(
-            "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub {total_unsub:?} unsub \
-             {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and {num_unsub} unsubscribed",
+            "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub \
+             {total_unsub:?} unsub {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and \
+             {num_unsub} unsubscribed",
             start.elapsed()
         );
     }
@@ -693,7 +694,7 @@ impl BufferedEgress {
                 }
 
                 let delay = current_seconds_since_epoch - pkt.seconds_since_epoch;
-                self.behind = delay >= 8;
+                self.behind = delay >= 2;
                 if delay > 5 || self.ticks_elapsed_since_yield > 5 {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
