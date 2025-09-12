@@ -9,7 +9,11 @@ use roaring::RoaringBitmap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, error, warn};
 
-use crate::egress::{Egress, EgressInstruction};
+use crate::{
+    CloneSyncUnsafeCell,
+    data::PlayerHandle,
+    egress::{Egress, EgressInstruction},
+};
 
 /// Maximum chunk distance between a packet's center and a player for a local broadcast to be sent to
 /// that player
@@ -45,7 +49,8 @@ impl Data for Player {
     }
 }
 
-pub struct ChannelSubscriptionDelta {
+#[derive(Default)]
+struct ChannelSubscriptionDelta {
     /// List of connection ids that are pending a subscription to this channel that were not
     /// previously pending a connection
     new_pending_connections: Vec<u64>,
@@ -54,22 +59,36 @@ pub struct ChannelSubscriptionDelta {
     unsubscribed_connections: FxHashSet<u64>,
 }
 
-pub struct Channel {
+// TODO merge this with CHannel
+#[derive(Clone)]
+struct ChannelSubscribers {
     /// List of connection ids that are pending a subscription to this channel
-    pending_connections: FxHashSet<u64>,
+    pending_connections: Arc<FxHashSet<u64>>,
 
     /// List of connection ids that are currently subscribed to this channel
     subscribed_connections: Arc<FxHashSet<u64>>,
 
+    chunk_position: I16Vec2,
+}
+
+pub struct Channel {
+    subscribers: ChannelSubscribers,
     cached_subscribe_packets: Option<Bytes>,
     unsubscribe_packets: Bytes,
-
-    chunk_position: I16Vec2,
 }
 
 #[derive(Default)]
 pub struct ChannelManager {
     channels: FxHashMap<u32, Channel>,
+}
+
+impl ChannelManager {
+    fn to_subscribers(&self) -> FxHashMap<u32, ChannelSubscribers> {
+        self.channels
+            .iter()
+            .map(|(id, channel)| (*id, channel.subscribers.clone()))
+            .collect()
+    }
 }
 
 /// Buffers egress operations for optimized processing.
@@ -82,13 +101,31 @@ pub struct BufferedEgress {
     pub(crate) ticks_elapsed_since_yield: u64,
     total_time: std::time::Duration,
     total_time_in_write: std::time::Duration,
+    total_time_in_sub: std::time::Duration,
     behind: bool,
+
+    subscription_sender: kanal::Sender<(
+        Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
+        Vec<Player>,
+    )>,
+    delta_receiver: tokio::sync::mpsc::Receiver<FxHashMap<u32, ChannelSubscriptionDelta>>,
+    pending_subscription_deltas: bool,
 }
 
 impl BufferedEgress {
     /// Creates a new `BufferedEgress` instance.
     #[must_use]
     pub fn new(egress: Egress) -> Self {
+        let (subscription_sender, subscription_receiver) = kanal::bounded(1);
+        let (delta_sender, delta_receiver) = tokio::sync::mpsc::channel(1);
+
+        std::thread::Builder::new()
+            .name("channel_subscriptions".to_string())
+            .spawn(move || {
+                Self::subscription_worker(subscription_receiver, delta_sender);
+            })
+            .unwrap();
+
         Self {
             channel_manager: ChannelManager::default(),
             egress,
@@ -96,7 +133,91 @@ impl BufferedEgress {
             ticks_elapsed_since_yield: 0,
             total_time: std::time::Duration::from_secs(0),
             total_time_in_write: std::time::Duration::from_secs(0),
+            total_time_in_sub: std::time::Duration::from_secs(0),
             behind: false,
+
+            subscription_sender,
+            delta_receiver,
+            pending_subscription_deltas: false,
+        }
+    }
+
+    /// Polls for updates from background threads. This is cancel safe.
+    pub fn poll(&mut self) {
+        if !self.pending_subscription_deltas {
+            return;
+        }
+
+        // TODO use await
+        if let Ok(deltas) = self.delta_receiver.try_recv() {
+            let start = std::time::Instant::now();
+            self.pending_subscription_deltas = false;
+            let mut requested_subscriptions = Vec::new();
+            let player_registry = Arc::make_mut(&mut self.egress.player_registry);
+            for (channel_id, delta) in deltas {
+                let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+                    error!(
+                        "server sent UpdateChannelPositions with an invalid channel id \
+                         {channel_id}"
+                    );
+                    continue;
+                };
+
+                if !delta.new_pending_connections.is_empty() {
+                    if channel.subscribers.pending_connections.is_empty() {
+                        // Request subscribe packets from the server
+                        requested_subscriptions
+                            .push((channel_id, channel.cached_subscribe_packets.is_some()));
+                    }
+                    Arc::make_mut(&mut channel.subscribers.pending_connections)
+                        .extend(delta.new_pending_connections.into_iter());
+                }
+
+                if !delta.unsubscribed_connections.is_empty() {
+                    for stream in &delta.unsubscribed_connections {
+                        assert!(
+                            Arc::make_mut(&mut channel.subscribers.subscribed_connections)
+                                .remove(stream)
+                        );
+
+                        let Some(player) = player_registry.get_mut(stream) else {
+                            error!("invalid stream id");
+                            continue;
+                        };
+
+                        assert!(player.get_mut().subscribed_channels.remove(channel_id));
+                    }
+
+                    self.egress
+                        .egress_sender
+                        .send(EgressInstruction::Broadcast {
+                            streams: delta.unsubscribed_connections.into(),
+                            exclude: 0,
+                            data: channel.unsubscribe_packets.clone(),
+                        })
+                        .unwrap();
+                }
+            }
+
+            if !requested_subscriptions.is_empty() {
+                let request = rkyv::to_bytes::<rkyv::rancor::Error>(
+                    &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
+                        hyperion_proto::RequestSubscribeChannelPackets {
+                            channels: &requested_subscriptions,
+                        },
+                    ),
+                )
+                .unwrap();
+                let server_sender = self.egress.server_sender.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = server_sender.send(request).await {
+                        error!("failed to send request subscribe channel packets: {e}");
+                    }
+                });
+            }
+            warn!("spent {:?} syncing deltas", start.elapsed());
+        } else {
+            // error!("channel subscription delta channel closed");
         }
     }
 
@@ -120,8 +241,15 @@ impl BufferedEgress {
 
             let Ok(position) = rkyv::deserialize::<_, !>(&update.position);
             let position = I16Vec2::from(position);
-            channel.chunk_position = position;
+            channel.subscribers.chunk_position = position;
         }
+
+        if self.pending_subscription_deltas {
+            return;
+        }
+
+        self.pending_subscription_deltas = true;
+
         // TODO rename Player struct to smth more generic
         let mut channels = self
             .channel_manager
@@ -129,151 +257,155 @@ impl BufferedEgress {
             .iter()
             .map(|(&channel_id, channel)| Player {
                 stream: channel_id as u64,
-                chunk_position: channel.chunk_position,
+                chunk_position: channel.subscribers.chunk_position,
             })
             .collect::<Vec<_>>();
 
-        let channel_bvh = Bvh::build(&mut channels, ());
-        let mut requested_subscriptions = Vec::new();
-        let mut num_sub = 0;
-        let mut num_unsub = 0;
-
-        let mut total_psub = std::time::Duration::from_secs(0);
-        let mut total_sub = std::time::Duration::from_secs(0);
-        let mut total_unsub = std::time::Duration::from_secs(0);
-        let mut total_request_subscribes = std::time::Duration::from_secs(0);
-
-        for (&stream, player) in &mut self.egress.player_registry {
-            let player = player.get_mut();
-            let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
-            // let mut channels_below_subscribe_radius = RoaringBitmap::new();
-            //            for slice in channel_bvh.get_in(Aabb::new(
-            //                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-            //                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-            //            )) {
-            //                let (_, channel_ids) = channel_bvh.inner();
-            //
-            //                let start = slice.start as usize;
-            //                let end = slice.end as usize;
-            //
-            //                let channel_ids = &channel_ids[start..end];
-            //
-            //                channels_below_unsubscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
-            //                // channels_below_subscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
-            //
-            ////                for &channel_id in channel_ids {
-            ////                    // TODO store u32s directly
-            ////                    let channel_id = channel_id as u32;
-            ////
-            ////                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
-            ////                        error!("bvh contains invalid channel");
-            ////                        continue;
-            ////                    };
-            ////
-            ////                    // TODO shoild this be a separate bvh query?
-            ////                    let within_subscribe_radius = (channel.chunk_position - player.position).abs().max_element() <= SUBSCRIBE_RADIUS;
-            ////
-            ////                    if within_subscribe_radius {
-            ////                        channels_below_subscribe_radius.insert(channel_id);
-            ////                    }
-            ////                }
-            //            }
-
-            let (_, channel_ids) = channel_bvh.inner();
-
-            channels_below_unsubscribe_radius.extend(
-                channel_bvh
-                    .get_in(Aabb::new(
-                        player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-                        player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
-                    ))
-                    .into_iter()
-                    .flat_map(|slice| {
-                        let start = slice.start as usize;
-                        let end = slice.end as usize;
-
-                        let channel_ids = &channel_ids[start..end];
-
-                        channel_ids.iter().map(|id| *id as u32)
-                    }),
-            );
-            let channels_below_subscribe_radius = &channels_below_unsubscribe_radius;
-
-            for channel_id in channels_below_subscribe_radius - &player.subscribed_channels {
-                let start3 = std::time::Instant::now();
-                // This channel is below the subscribe radius but is not currently subscribed. Subscribe to the channel
-                let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
-                    error!("bvh contains invalid channel");
-                    continue;
-                };
-                if channel.pending_connections.is_empty() {
-                    // Request subscribe packets from the server
-                    requested_subscriptions
-                        .push((channel_id, channel.cached_subscribe_packets.is_some()));
-                }
-                total_psub += start3.elapsed();
-                let new = channel.pending_connections.insert(stream);
-                total_sub += start3.elapsed();
-                if new {
-                    num_sub += 1;
-                }
-            }
-
-            for channel_to_unsubscribe in
-                &player.subscribed_channels - channels_below_unsubscribe_radius
-            {
-                let start3 = std::time::Instant::now();
-                let Some(channel) = self
-                    .channel_manager
-                    .channels
-                    .get_mut(&channel_to_unsubscribe)
-                else {
-                    error!("could not find channel to unsubscribe");
-                    continue;
-                };
-
-                num_unsub += 1;
-
-                // TODO removing one at a time if probabbly inefficient
-                player.subscribed_channels.remove(channel_to_unsubscribe);
-                let was_subscribed =
-                    Arc::make_mut(&mut channel.subscribed_connections).remove(&stream);
-                assert!(was_subscribed);
-                self.egress
-                    .egress_sender
-                    .send(EgressInstruction::Unicast {
-                        stream,
-                        data: channel.unsubscribe_packets.clone(),
-                    })
-                    .unwrap();
-                total_unsub += start3.elapsed();
-            }
-        }
-
-        if !requested_subscriptions.is_empty() {
-            let start3 = std::time::Instant::now();
-            let request = rkyv::to_bytes::<rkyv::rancor::Error>(
-                &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
-                    hyperion_proto::RequestSubscribeChannelPackets {
-                        channels: &requested_subscriptions,
-                    },
-                ),
-            )
+        self.subscription_sender
+            .send((self.egress.player_registry.clone(), channels))
             .unwrap();
-            let server_sender = self.egress.server_sender.clone();
-            tokio::spawn(async move {
-                if let Err(e) = server_sender.send(request).await {
-                    error!("failed to send request subscribe channel packets: {e}");
-                }
-            });
-            total_request_subscribes += start3.elapsed();
-        }
-        tracing::warn!(
-            "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub \
-             {total_unsub:?} unsub {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and \
-             {num_unsub} unsubscribed",
-            start.elapsed()
-        );
+
+        // let channel_bvh = Bvh::build(&mut channels, ());
+        // let mut requested_subscriptions = Vec::new();
+        // let mut num_sub = 0;
+        // let mut num_unsub = 0;
+        //
+        // let mut total_psub = std::time::Duration::from_secs(0);
+        // let mut total_sub = std::time::Duration::from_secs(0);
+        // let mut total_unsub = std::time::Duration::from_secs(0);
+        // let mut total_request_subscribes = std::time::Duration::from_secs(0);
+        //
+        // for (&stream, player) in Arc::make_mut(&mut self.egress.player_registry) {
+        // let player = player.get_mut();
+        // let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
+        // let mut channels_below_subscribe_radius = RoaringBitmap::new();
+        //            for slice in channel_bvh.get_in(Aabb::new(
+        //                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+        //                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+        //            )) {
+        //                let (_, channel_ids) = channel_bvh.inner();
+        //
+        //                let start = slice.start as usize;
+        //                let end = slice.end as usize;
+        //
+        //                let channel_ids = &channel_ids[start..end];
+        //
+        //                channels_below_unsubscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+        //                // channels_below_subscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+        //
+        // /                for &channel_id in channel_ids {
+        // /                    // TODO store u32s directly
+        // /                    let channel_id = channel_id as u32;
+        // /
+        // /                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+        // /                        error!("bvh contains invalid channel");
+        // /                        continue;
+        // /                    };
+        // /
+        // /                    // TODO shoild this be a separate bvh query?
+        // /                    let within_subscribe_radius = (channel.chunk_position - player.position).abs().max_element() <= SUBSCRIBE_RADIUS;
+        // /
+        // /                    if within_subscribe_radius {
+        // /                        channels_below_subscribe_radius.insert(channel_id);
+        // /                    }
+        // /                }
+        //            }
+        //
+        // let (_, channel_ids) = channel_bvh.inner();
+        //
+        // channels_below_unsubscribe_radius.extend(
+        // channel_bvh
+        // .get_in(Aabb::new(
+        // player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+        // player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+        // ))
+        // .into_iter()
+        // .flat_map(|slice| {
+        // let start = slice.start as usize;
+        // let end = slice.end as usize;
+        //
+        // let channel_ids = &channel_ids[start..end];
+        //
+        // channel_ids.iter().map(|id| *id as u32)
+        // }),
+        // );
+        // let channels_below_subscribe_radius = &channels_below_unsubscribe_radius;
+        //
+        // for channel_id in channels_below_subscribe_radius - &player.subscribed_channels {
+        // let start3 = std::time::Instant::now();
+        // This channel is below the subscribe radius but is not currently subscribed. Subscribe to the channel
+        // let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+        // error!("bvh contains invalid channel");
+        // continue;
+        // };
+        // if channel.subscribers.pending_connections.is_empty() {
+        // Request subscribe packets from the server
+        // requested_subscriptions
+        // .push((channel_id, channel.cached_subscribe_packets.is_some()));
+        // }
+        // total_psub += start3.elapsed();
+        // let new = Arc::make_mut(&mut channel.subscribers.pending_connections).insert(stream);
+        // total_sub += start3.elapsed();
+        // if new {
+        // num_sub += 1;
+        // }
+        // }
+        //
+        // for channel_to_unsubscribe in
+        // &player.subscribed_channels - channels_below_unsubscribe_radius
+        // {
+        // let start3 = std::time::Instant::now();
+        // let Some(channel) = self
+        // .channel_manager
+        // .channels
+        // .get_mut(&channel_to_unsubscribe)
+        // else {
+        // error!("could not find channel to unsubscribe");
+        // continue;
+        // };
+        //
+        // num_unsub += 1;
+        //
+        // TODO removing one at a time if probabbly inefficient
+        // player.subscribed_channels.remove(channel_to_unsubscribe);
+        // let was_subscribed =
+        // Arc::make_mut(&mut channel.subscribers.subscribed_connections).remove(&stream);
+        // assert!(was_subscribed);
+        // self.egress
+        // .egress_sender
+        // .send(EgressInstruction::Unicast {
+        // stream,
+        // data: channel.unsubscribe_packets.clone(),
+        // })
+        // .unwrap();
+        // total_unsub += start3.elapsed();
+        // }
+        // }
+        //
+        // if !requested_subscriptions.is_empty() {
+        // let start3 = std::time::Instant::now();
+        // let request = rkyv::to_bytes::<rkyv::rancor::Error>(
+        // &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
+        // hyperion_proto::RequestSubscribeChannelPackets {
+        // channels: &requested_subscriptions,
+        // },
+        // ),
+        // )
+        // .unwrap();
+        // let server_sender = self.egress.server_sender.clone();
+        // tokio::spawn(async move {
+        // if let Err(e) = server_sender.send(request).await {
+        // error!("failed to send request subscribe channel packets: {e}");
+        // }
+        // });
+        // total_request_subscribes += start3.elapsed();
+        // }
+        // tracing::warn!(
+        // "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub \
+        // {total_unsub:?} unsub {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and \
+        // {num_unsub} unsubscribed",
+        // start.elapsed()
+        // );
     }
 
     //    pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
@@ -318,7 +450,7 @@ impl BufferedEgress {
     //                let streams = &streams[start..end];
     //                for &stream in streams {
     //                    // This steam is below the unsubscribe radius...
-    //                    if channel.subscribed_connections.contains(&stream) {
+    //                    if channel.subscribers.subscribed_connections.contains(&stream) {
     //                        // ... and it is already subscribed, so it can remain subscribed to this channel
     //                        should_remain_subscribed.insert(stream);
     //                    }
@@ -348,23 +480,23 @@ impl BufferedEgress {
     //                    }
     //
     //                    // This stream should be subscribed to this channel...
-    //                    if !channel.subscribed_connections.contains(&stream) {
+    //                    if !channel.subscribers.subscribed_connections.contains(&stream) {
     //                        // ... but it is not currently subscribed
     //
-    //                        if channel.pending_connections.is_empty() {
+    //                        if channel.subscribers.pending_connections.is_empty() {
     //                            // Request subscribe packets from the server
     //                            requested_subscriptions.push((
     //                                    channel_id,
     //                                    channel.cached_subscribe_packets.is_some(),
     //                            ));
     //                        }
-    //                        channel.pending_connections.insert(stream);
+    //                        channel.subscribers.pending_connections.insert(stream);
     //                    }
     //                }
     //            }
     //
-    //            if channel.subscribed_connections.len() != should_remain_subscribed.len() {
-    //                channel.subscribed_connections.retain(|stream| {
+    //            if channel.subscribers.subscribed_connections.len() != should_remain_subscribed.len() {
+    //                channel.subscribers.subscribed_connections.retain(|stream| {
     //                    let should_remain = should_remain_subscribed.contains(stream);
     //
     //                    if !should_remain {
@@ -432,7 +564,9 @@ impl BufferedEgress {
                     let Ok(position) = rkyv::deserialize::<_, !>(&update.position);
                     let position = I16Vec2::from(position);
 
-                    let Some(player) = self.egress.player_registry.get_mut(&stream) else {
+                    let Some(player) =
+                        Arc::make_mut(&mut self.egress.player_registry).get_mut(&stream)
+                    else {
                         error!("unknown player {stream:?}");
                         continue;
                     };
@@ -459,11 +593,13 @@ impl BufferedEgress {
                     self.channel_manager
                         .channels
                         .insert(packet.channel_id.into(), Channel {
-                            pending_connections: FxHashSet::default(),
-                            subscribed_connections: Arc::new(FxHashSet::default()),
+                            subscribers: ChannelSubscribers {
+                                pending_connections: Arc::default(),
+                                subscribed_connections: Arc::default(),
+                                chunk_position: position.into(),
+                            },
                             cached_subscribe_packets: None,
                             unsubscribe_packets: Bytes::from(unsubscribe_packets),
-                            chunk_position: position.into(),
                         });
 
                 if previous_channel.is_some() {
@@ -489,7 +625,7 @@ impl BufferedEgress {
 
                 // Unsubscribe all players
                 self.egress.execute(EgressInstruction::Broadcast {
-                    streams: channel.subscribed_connections.into(),
+                    streams: channel.subscribers.subscribed_connections.into(),
                     exclude: 0,
                     data: channel.unsubscribe_packets,
                 });
@@ -502,7 +638,7 @@ impl BufferedEgress {
                     return;
                 };
 
-                if channel.pending_connections.is_empty() {
+                if channel.subscribers.pending_connections.is_empty() {
                     warn!(
                         "server sent SubscribeChannelPackets but there are no pending subscribers"
                     );
@@ -532,31 +668,40 @@ impl BufferedEgress {
                     bytes
                 };
 
-                let start2 = std::time::Instant::now();
                 // TODO use max pending bytes
-                channel.pending_connections.par_iter().for_each(|&stream| {
-                    let Some(player) = self.egress.player_registry.get(&stream) else {
-                        error!("player not found");
-                        return;
-                    };
+                let start3 = std::time::Instant::now();
+                channel
+                    .subscribers
+                    .pending_connections
+                    .par_iter()
+                    .for_each(|&stream| {
+                        let Some(player) = self.egress.player_registry.get(&stream) else {
+                            error!("player not found");
+                            return;
+                        };
 
-                    // SAFETY: pending_connections is a HashSet which guarantees that each stream
-                    // id is unique
-                    let player = unsafe { &mut *player.get() };
+                        // SAFETY: pending_connections is a HashSet which guarantees that each stream
+                        // id is unique
+                        let player = unsafe { &mut *player.get() };
 
-                    player.subscribed_channels.insert(channel_id);
+                        player.subscribed_channels.insert(channel_id);
 
-                    // TODO remove this note
-                    // Note that even if the subscribe packets were not sent and a stream is not
-                    // subscribed, the stream is still removed from pending connections. This
-                    // allows the game server to send new subscribe packets later because the proxy
-                    // will not request subscribe packets if there's already a stream in the
-                    // pending connections list.
-                });
-                Arc::make_mut(&mut channel.subscribed_connections)
-                    .extend(channel.pending_connections.iter().copied());
+                        // TODO remove this note
+                        // Note that even if the subscribe packets were not sent and a stream is not
+                        // subscribed, the stream is still removed from pending connections. This
+                        // allows the game server to send new subscribe packets later because the proxy
+                        // will not request subscribe packets if there's already a stream in the
+                        // pending connections list.
+                    });
+                self.total_time_in_sub += start3.elapsed();
+                Arc::make_mut(&mut channel.subscribers.subscribed_connections)
+                    .extend(channel.subscribers.pending_connections.iter().copied());
+                let start2 = std::time::Instant::now();
                 self.egress.execute(EgressInstruction::Broadcast {
-                    streams: std::mem::take(&mut channel.pending_connections).into(),
+                    streams: std::mem::take(Arc::make_mut(
+                        &mut channel.subscribers.pending_connections,
+                    ))
+                    .into(),
                     exclude,
                     data,
                 });
@@ -647,12 +792,12 @@ impl BufferedEgress {
 
                 let start2 = std::time::Instant::now();
                 self.egress.execute(EgressInstruction::Broadcast {
-                    streams: channel.subscribed_connections.clone().into(),
+                    streams: channel.subscribers.subscribed_connections.clone().into(),
                     exclude,
                     data,
                 });
                 self.total_time_in_write += start2.elapsed();
-                //                for &stream in &channel.subscribed_connections {
+                //                for &stream in &channel.subscribers.subscribed_connections {
                 //                    if stream == exclude {
                 //                        continue;
                 //                    }
@@ -699,13 +844,134 @@ impl BufferedEgress {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
                          server to proxy messages and {} game ticks have elapsed since the server \
-                         to proxy task has yielded execution. ({:?}/{:?})",
-                        self.ticks_elapsed_since_yield, self.total_time_in_write, self.total_time,
+                         to proxy task has yielded execution. ({:?}/[{:?}]/{:?})",
+                        self.ticks_elapsed_since_yield,
+                        self.total_time_in_write,
+                        self.total_time_in_sub,
+                        self.total_time,
                     );
                 }
                 self.ticks_elapsed_since_yield += 1;
             }
         }
         self.total_time += start.elapsed();
+    }
+
+    fn subscription_worker(
+        mut subscription_receiver: kanal::Receiver<(
+            Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
+            Vec<Player>,
+        )>,
+        delta_sender: tokio::sync::mpsc::Sender<FxHashMap<u32, ChannelSubscriptionDelta>>,
+    ) {
+        while let Ok((player_registry, mut channels)) = subscription_receiver.recv() {
+            let start = std::time::Instant::now();
+
+            let mut deltas: FxHashMap<u32, ChannelSubscriptionDelta> = FxHashMap::default();
+
+            let channel_bvh = Bvh::build(&mut channels, ());
+            let mut num_sub = 0;
+            let mut num_unsub = 0;
+
+            let mut total_psub = std::time::Duration::from_secs(0);
+            let mut total_sub = std::time::Duration::from_secs(0);
+            let mut total_unsub = std::time::Duration::from_secs(0);
+            let mut total_request_subscribes = std::time::Duration::from_secs(0);
+
+            for (&stream, player) in player_registry.iter() {
+                // SAFETY: we only get a mutable reference with a unique Arc reference so there are
+                // no mut references righ tnow
+                let player = unsafe { &*player.get() };
+
+                let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
+                // let mut channels_below_subscribe_radius = RoaringBitmap::new();
+                //            for slice in channel_bvh.get_in(Aabb::new(
+                //                    player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                //                    player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                //            )) {
+                //                let (_, channel_ids) = channel_bvh.inner();
+                //
+                //                let start = slice.start as usize;
+                //                let end = slice.end as usize;
+                //
+                //                let channel_ids = &channel_ids[start..end];
+                //
+                //                channels_below_unsubscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+                //                // channels_below_subscribe_radius.extend(channel_ids.iter().map(|id| *id as u32));
+                //
+                ////                for &channel_id in channel_ids {
+                ////                    // TODO store u32s directly
+                ////                    let channel_id = channel_id as u32;
+                ////
+                ////                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
+                ////                        error!("bvh contains invalid channel");
+                ////                        continue;
+                ////                    };
+                ////
+                ////                    // TODO shoild this be a separate bvh query?
+                ////                    let within_subscribe_radius = (channel.chunk_position - player.position).abs().max_element() <= SUBSCRIBE_RADIUS;
+                ////
+                ////                    if within_subscribe_radius {
+                ////                        channels_below_subscribe_radius.insert(channel_id);
+                ////                    }
+                ////                }
+                //            }
+
+                let (_, channel_ids) = channel_bvh.inner();
+
+                channels_below_unsubscribe_radius.extend(
+                    channel_bvh
+                        .get_in(Aabb::new(
+                            player.position - I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                            player.position + I16Vec2::splat(UNSUBSCRIBE_RADIUS),
+                        ))
+                        .into_iter()
+                        .flat_map(|slice| {
+                            let start = slice.start as usize;
+                            let end = slice.end as usize;
+
+                            let channel_ids = &channel_ids[start..end];
+
+                            channel_ids.iter().map(|id| *id as u32)
+                        }),
+                );
+                let channels_below_subscribe_radius = &channels_below_unsubscribe_radius;
+
+                for channel_id in channels_below_subscribe_radius - &player.subscribed_channels {
+                    let start3 = std::time::Instant::now();
+                    // This channel is below the subscribe radius but is not currently subscribed. Subscribe to the channel
+                    deltas
+                        .entry(channel_id)
+                        .or_default()
+                        .new_pending_connections
+                        .push(stream);
+                }
+
+                for channel_to_unsubscribe in
+                    &player.subscribed_channels - channels_below_unsubscribe_radius
+                {
+                    let start3 = std::time::Instant::now();
+
+                    num_unsub += 1;
+
+                    deltas
+                        .entry(channel_to_unsubscribe)
+                        .or_default()
+                        .unsubscribed_connections
+                        .insert(stream);
+                    total_unsub += start3.elapsed();
+                }
+            }
+
+            tracing::warn!(
+                "updated channel positions in {:?} ({total_psub:?} psub {total_sub:?} sub \
+                 {total_unsub:?} unsub {total_request_subscribes:?} request subscribes) - {num_sub} new subscriptions and \
+                 {num_unsub} unsubscribed",
+                start.elapsed()
+            );
+            // TODO drop player reigstry arc to avoid clone from make_mut
+            // TODO dont use tokio channels maybe
+            delta_sender.blocking_send(deltas).unwrap();
+        }
     }
 }

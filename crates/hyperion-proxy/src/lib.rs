@@ -346,6 +346,8 @@ where
             tokio::task::yield_now().await;
         }
 
+        self.egress.poll();
+
         result
     }
 
@@ -444,6 +446,34 @@ where
                 Poll::Pending
             }
         }
+    }
+}
+
+pub struct CloneSyncUnsafeCell<T>(SyncUnsafeCell<T>);
+
+impl<T> CloneSyncUnsafeCell<T> {
+    pub fn new(value: T) -> Self {
+        Self(SyncUnsafeCell::new(value))
+    }
+
+    /// # Safety
+    /// See safety requirements of [`SyncUnsafeCell::get`]. In addition, a mutable reference must
+    /// not be held while this is cloned.
+    pub const fn get(&self) -> *mut T {
+        self.0.get()
+    }
+
+    pub const fn get_mut(&mut self) -> &mut T {
+        self.0.get_mut()
+    }
+}
+
+impl<T: Clone> Clone for CloneSyncUnsafeCell<T> {
+    fn clone(&self) -> Self {
+        // SAFETY: Safety requirements of `get` require that there are not mutable references held
+        // to the underlying value while this is cloned
+        let this = unsafe { &*self.get() };
+        Self::new(this.clone())
     }
 }
 

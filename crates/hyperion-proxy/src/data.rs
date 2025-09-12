@@ -32,6 +32,7 @@ impl From<u64> for PlayerId {
     }
 }
 
+#[derive(Clone)]
 pub struct PlayerHandle {
     /// Whether the player is allowed to send broadcasts.
     ///

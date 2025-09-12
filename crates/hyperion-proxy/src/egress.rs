@@ -14,7 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::Notify;
 use tracing::{error, instrument, warn};
 
-use crate::{data::PlayerHandle, server_sender::ServerSender};
+use crate::{CloneSyncUnsafeCell, data::PlayerHandle, server_sender::ServerSender};
 
 /// Maximum number of bytes that will be copied to the channel instead
 /// of being sent as shared bytes
@@ -78,7 +78,7 @@ pub enum EgressInstruction {
 
 pub struct Egress {
     // TODO remove SyncUnsafeCell
-    pub(crate) player_registry: FxHashMap<u64, SyncUnsafeCell<PlayerHandle>>,
+    pub(crate) player_registry: Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
     pub(crate) server_sender: ServerSender,
     pub(crate) egress_sender: kanal::Sender<EgressInstruction>,
 }
@@ -96,7 +96,7 @@ impl Egress {
             .unwrap();
 
         Self {
-            player_registry: FxHashMap::default(),
+            player_registry: Arc::new(FxHashMap::default()),
             server_sender,
             egress_sender,
         }
@@ -116,11 +116,10 @@ impl Egress {
             total_bytes_pending_send: total_bytes_pending_send.clone(),
         });
 
-        if self
-            .player_registry
+        if Arc::make_mut(&mut self.player_registry)
             .insert(
                 stream,
-                SyncUnsafeCell::new(PlayerHandle::new(total_bytes_pending_send)),
+                CloneSyncUnsafeCell::new(PlayerHandle::new(total_bytes_pending_send)),
             )
             .is_some()
         {
@@ -134,8 +133,11 @@ impl Egress {
     pub fn remove_player(&mut self, stream: u64) {
         self.execute(EgressInstruction::RemovePlayer { stream });
 
-        if self.player_registry.remove(&stream).is_none() {
-            error!("player connection message attempted to remove invalid strema id {stream:?}");
+        if Arc::make_mut(&mut self.player_registry)
+            .remove(&stream)
+            .is_none()
+        {
+            error!("player connection message attempted to remove invalid stream id {stream:?}");
         }
     }
 
@@ -147,7 +149,7 @@ impl Egress {
     pub fn handle_set_receive_broadcasts(&mut self, pkt: &ArchivedSetReceiveBroadcasts) {
         let Ok(stream) = rkyv::deserialize::<u64, !>(&pkt.stream);
 
-        let Some(player) = self.player_registry.get_mut(&stream) else {
+        let Some(player) = Arc::make_mut(&mut self.player_registry).get_mut(&stream) else {
             error!("Player not found for stream {stream:?}");
             return;
         };
@@ -238,7 +240,8 @@ impl Egress {
 
                         // SAFETY: Since streams is stored as a HashSet, there cannot be duplicate
                         // keys, so there cannot be any other code currently holding a reference to
-                        // this player at the time
+                        // this player at the time.In addition, this will not clone the player
+                        // while a mutable reference is held.
                         let player = unsafe { &mut *player.get() };
 
                         let Some((sender, notify, total_bytes_pending_send)) = player else {
