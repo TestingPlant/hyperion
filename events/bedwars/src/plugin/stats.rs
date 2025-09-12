@@ -54,8 +54,7 @@ impl Plugin for StatsPlugin {
                     .player_count
                     .load(std::sync::atomic::Ordering::Relaxed);
 
-                let ms_per_tick =
-                    start.0.elapsed().as_secs_f32() * 1000.0 / (ticks_elapsed as f32);
+                let ms_per_tick = start.0.elapsed().as_secs_f32() * 1000.0 / (ticks_elapsed as f32);
 
                 // If ticks_elapsed > 1, this inserts the average tick time multiple times for
                 // more accurate data
