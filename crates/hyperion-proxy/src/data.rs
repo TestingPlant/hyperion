@@ -46,8 +46,6 @@ pub struct PlayerHandle {
     total_bytes_pending_send: Arc<AtomicUsize>,
 
     pub(crate) position: I16Vec2,
-
-    pub(crate) subscribed_channels: RoaringBitmap,
 }
 
 impl PlayerHandle {
@@ -57,7 +55,6 @@ impl PlayerHandle {
             can_receive_broadcasts: false,
             total_bytes_pending_send,
             position: I16Vec2::ZERO,
-            subscribed_channels: RoaringBitmap::new(),
         }
     }
 

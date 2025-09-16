@@ -30,6 +30,7 @@ envy = "0.4"
 dotenvy = "0.15"
 
 console-subscriber = "0.4"
+enum-map = "2.7"
 
 [lints]
 workspace = true

@@ -2,6 +2,7 @@ use std::{sync::Arc, time::SystemTime};
 
 use bvh::{Aabb, Bvh, Data, Point};
 use bytes::Bytes;
+use enum_map::{Enum, EnumMap};
 use glam::I16Vec2;
 use hyperion_proto::{ArchivedServerToProxyMessage, ArchivedUpdateChannelPositions};
 use rayon::prelude::*;
@@ -59,6 +60,16 @@ struct ChannelSubscriptionDelta {
     unsubscribed_connections: FxHashSet<u64>,
 }
 
+#[derive(Default)]
+struct ChannelsDelta {
+    /// Channels where subscribe packets have been sent. This stores a tuple containing the channel
+    /// id and the list of connection ids which have been sent.
+    subscribed_channels: Vec<(u32, Arc<FxHashSet<u64>>)>,
+
+    /// Channels which have been removed
+    removed_channels: RoaringBitmap,
+}
+
 // TODO merge this with CHannel
 #[derive(Clone)]
 struct ChannelSubscribers {
@@ -91,6 +102,22 @@ impl ChannelManager {
     }
 }
 
+#[derive(Debug, Enum, Copy, Clone, PartialEq, Eq)]
+pub enum ServerToProxyMessageType {
+    UpdatePlayerPositions,
+    AddChannel,
+    UpdateChannelPositions,
+    RemoveChannel,
+    SubscribeChannelPackets,
+    BroadcastGlobal,
+    BroadcastLocal,
+    BroadcastChannel,
+    Unicast,
+    SetReceiveBroadcasts,
+    Shutdown,
+    CurrentTime,
+}
+
 /// Buffers egress operations for optimized processing.
 pub struct BufferedEgress {
     /// Manages channels
@@ -102,14 +129,21 @@ pub struct BufferedEgress {
     total_time: std::time::Duration,
     total_time_in_write: std::time::Duration,
     total_time_in_sub: std::time::Duration,
+    total_time_in_clone_subs: std::time::Duration,
+    total_time_in_update_subs: std::time::Duration,
+    timings: EnumMap<ServerToProxyMessageType, std::time::Duration>,
     behind: bool,
 
     subscription_sender: kanal::Sender<(
         Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
+        ChannelsDelta,
+        FxHashMap<u32, ChannelSubscribers>,
         Vec<Player>,
     )>,
     delta_receiver: tokio::sync::mpsc::Receiver<FxHashMap<u32, ChannelSubscriptionDelta>>,
     pending_subscription_deltas: bool,
+
+    channels_delta: ChannelsDelta,
 }
 
 impl BufferedEgress {
@@ -134,11 +168,15 @@ impl BufferedEgress {
             total_time: std::time::Duration::from_secs(0),
             total_time_in_write: std::time::Duration::from_secs(0),
             total_time_in_sub: std::time::Duration::from_secs(0),
+            total_time_in_clone_subs: std::time::Duration::from_secs(0),
+            total_time_in_update_subs: std::time::Duration::from_secs(0),
+            timings: EnumMap::default(),
             behind: false,
 
             subscription_sender,
             delta_receiver,
             pending_subscription_deltas: false,
+            channels_delta: ChannelsDelta::default(),
         }
     }
 
@@ -164,28 +202,24 @@ impl BufferedEgress {
                 };
 
                 if !delta.new_pending_connections.is_empty() {
-                    if channel.subscribers.pending_connections.is_empty() {
+                    let pending_connections =
+                        Arc::make_mut(&mut channel.subscribers.pending_connections);
+
+                    if pending_connections.is_empty() {
                         // Request subscribe packets from the server
                         requested_subscriptions
                             .push((channel_id, channel.cached_subscribe_packets.is_some()));
                     }
-                    Arc::make_mut(&mut channel.subscribers.pending_connections)
-                        .extend(delta.new_pending_connections.into_iter());
+
+                    pending_connections.extend(delta.new_pending_connections.into_iter());
                 }
 
                 if !delta.unsubscribed_connections.is_empty() {
+                    let subscribed_connections =
+                        Arc::make_mut(&mut channel.subscribers.subscribed_connections);
                     for stream in &delta.unsubscribed_connections {
-                        assert!(
-                            Arc::make_mut(&mut channel.subscribers.subscribed_connections)
-                                .remove(stream)
-                        );
-
-                        let Some(player) = player_registry.get_mut(stream) else {
-                            error!("invalid stream id");
-                            continue;
-                        };
-
-                        assert!(player.get_mut().subscribed_channels.remove(channel_id));
+                        // eprintln!("removing stream {stream} from channel {channel_id}");
+                        assert!(subscribed_connections.remove(stream));
                     }
 
                     self.egress
@@ -222,11 +256,6 @@ impl BufferedEgress {
     }
 
     pub fn update_channel_positions(&mut self, packet: &ArchivedUpdateChannelPositions<'_>) {
-        // TODO remove mod
-        if self.ticks_elapsed_since_yield % 20 != 0 || self.behind {
-            return;
-        }
-
         let start = std::time::Instant::now();
 
         // Update channel positions
@@ -244,7 +273,7 @@ impl BufferedEgress {
             channel.subscribers.chunk_position = position;
         }
 
-        if self.pending_subscription_deltas {
+        if self.pending_subscription_deltas || self.behind {
             return;
         }
 
@@ -262,7 +291,12 @@ impl BufferedEgress {
             .collect::<Vec<_>>();
 
         self.subscription_sender
-            .send((self.egress.player_registry.clone(), channels))
+            .send((
+                self.egress.player_registry.clone(),
+                std::mem::take(&mut self.channels_delta),
+                self.channel_manager.to_subscribers(),
+                channels,
+            ))
             .unwrap();
 
         // let channel_bvh = Bvh::build(&mut channels, ());
@@ -536,6 +570,38 @@ impl BufferedEgress {
     #[expect(clippy::excessive_nesting)]
     pub fn handle_packet(&mut self, message: &ArchivedServerToProxyMessage<'_>) {
         let start = std::time::Instant::now();
+
+        let ty = match &message {
+            ArchivedServerToProxyMessage::UpdatePlayerPositions(_) => {
+                ServerToProxyMessageType::UpdatePlayerPositions
+            }
+            ArchivedServerToProxyMessage::AddChannel(_) => ServerToProxyMessageType::AddChannel,
+            ArchivedServerToProxyMessage::UpdateChannelPositions(_) => {
+                ServerToProxyMessageType::UpdateChannelPositions
+            }
+            ArchivedServerToProxyMessage::RemoveChannel(_) => {
+                ServerToProxyMessageType::RemoveChannel
+            }
+            ArchivedServerToProxyMessage::SubscribeChannelPackets(_) => {
+                ServerToProxyMessageType::SubscribeChannelPackets
+            }
+            ArchivedServerToProxyMessage::BroadcastGlobal(_) => {
+                ServerToProxyMessageType::BroadcastGlobal
+            }
+            ArchivedServerToProxyMessage::BroadcastLocal(_) => {
+                ServerToProxyMessageType::BroadcastLocal
+            }
+            ArchivedServerToProxyMessage::BroadcastChannel(_) => {
+                ServerToProxyMessageType::BroadcastChannel
+            }
+            ArchivedServerToProxyMessage::Unicast(_) => ServerToProxyMessageType::Unicast,
+            ArchivedServerToProxyMessage::SetReceiveBroadcasts(_) => {
+                ServerToProxyMessageType::SetReceiveBroadcasts
+            }
+            ArchivedServerToProxyMessage::Shutdown(_) => ServerToProxyMessageType::Shutdown,
+            ArchivedServerToProxyMessage::CurrentTime(_) => ServerToProxyMessageType::CurrentTime,
+        };
+
         match message {
             ArchivedServerToProxyMessage::UpdatePlayerPositions(packet) => {
                 if self.ticks_elapsed_since_yield != 0 {
@@ -629,6 +695,10 @@ impl BufferedEgress {
                     exclude: 0,
                     data: channel.unsubscribe_packets,
                 });
+
+                self.channels_delta
+                    .removed_channels
+                    .insert(packet.channel_id.into());
             }
             ArchivedServerToProxyMessage::SubscribeChannelPackets(packet) => {
                 let exclude = u64::from(packet.exclude);
@@ -638,7 +708,10 @@ impl BufferedEgress {
                     return;
                 };
 
-                if channel.subscribers.pending_connections.is_empty() {
+                let pending_connections =
+                    std::mem::take(&mut channel.subscribers.pending_connections);
+
+                if pending_connections.is_empty() {
                     warn!(
                         "server sent SubscribeChannelPackets but there are no pending subscribers"
                     );
@@ -669,39 +742,26 @@ impl BufferedEgress {
                 };
 
                 // TODO use max pending bytes
+                // for stream in pending_connections.iter() {
+                // eprintln!("adding stream {stream} to channel {channel_id}");
+                // }
+
+                // TODO the clone here is clearly somewhat expensive
+                dbg!(Arc::strong_count(
+                    &channel.subscribers.subscribed_connections
+                ));
+                let start4 = std::time::Instant::now();
+                let foo = Arc::make_mut(&mut channel.subscribers.subscribed_connections);
+                self.total_time_in_clone_subs += start4.elapsed();
                 let start3 = std::time::Instant::now();
-                channel
-                    .subscribers
-                    .pending_connections
-                    .par_iter()
-                    .for_each(|&stream| {
-                        let Some(player) = self.egress.player_registry.get(&stream) else {
-                            error!("player not found");
-                            return;
-                        };
-
-                        // SAFETY: pending_connections is a HashSet which guarantees that each stream
-                        // id is unique
-                        let player = unsafe { &mut *player.get() };
-
-                        player.subscribed_channels.insert(channel_id);
-
-                        // TODO remove this note
-                        // Note that even if the subscribe packets were not sent and a stream is not
-                        // subscribed, the stream is still removed from pending connections. This
-                        // allows the game server to send new subscribe packets later because the proxy
-                        // will not request subscribe packets if there's already a stream in the
-                        // pending connections list.
-                    });
-                self.total_time_in_sub += start3.elapsed();
-                Arc::make_mut(&mut channel.subscribers.subscribed_connections)
-                    .extend(channel.subscribers.pending_connections.iter().copied());
+                foo.extend(pending_connections.iter().copied());
+                self.total_time_in_update_subs += start3.elapsed();
+                self.channels_delta
+                    .subscribed_channels
+                    .push((channel_id, pending_connections.clone()));
                 let start2 = std::time::Instant::now();
                 self.egress.execute(EgressInstruction::Broadcast {
-                    streams: std::mem::take(Arc::make_mut(
-                        &mut channel.subscribers.pending_connections,
-                    ))
-                    .into(),
+                    streams: pending_connections.into(),
                     exclude,
                     data,
                 });
@@ -726,6 +786,7 @@ impl BufferedEgress {
                 let data =
                     Bytes::from(rkyv::deserialize::<_, rkyv::rancor::Error>(&packet.data).unwrap());
 
+                let start3 = std::time::Instant::now();
                 let position = I16Vec2::new(center_x, center_z);
                 let min = position - I16Vec2::splat(LOCAL_RADIUS);
                 let max = position + I16Vec2::splat(LOCAL_RADIUS);
@@ -758,7 +819,6 @@ impl BufferedEgress {
                 //                    data
                 //                    );
                 //                }
-                let start2 = std::time::Instant::now();
 
                 let targets = slices
                     .into_iter()
@@ -771,6 +831,9 @@ impl BufferedEgress {
                     .copied()
                     .collect::<FxHashSet<u64>>();
 
+                self.total_time_in_sub += start3.elapsed();
+
+                let start2 = std::time::Instant::now();
                 self.egress.execute(EgressInstruction::Broadcast {
                     streams: targets.into(),
                     exclude: player_id_to_exclude,
@@ -844,32 +907,77 @@ impl BufferedEgress {
                     warn!(
                         "proxy is running too slow - it is {delay} seconds behind on processing \
                          server to proxy messages and {} game ticks have elapsed since the server \
-                         to proxy task has yielded execution. ({:?}/[{:?}]/{:?})",
+                         to proxy task has yielded execution. (write {:?} / sub {:?} / clone {:?} \
+                         / update {:?} / total {:?}), {:#?}",
                         self.ticks_elapsed_since_yield,
                         self.total_time_in_write,
                         self.total_time_in_sub,
+                        self.total_time_in_clone_subs,
+                        self.total_time_in_update_subs,
                         self.total_time,
+                        &self.timings,
                     );
                 }
                 self.ticks_elapsed_since_yield += 1;
             }
         }
+        self.timings[ty] += start.elapsed();
         self.total_time += start.elapsed();
     }
 
     fn subscription_worker(
         mut subscription_receiver: kanal::Receiver<(
             Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
+            ChannelsDelta,
+            FxHashMap<u32, ChannelSubscribers>,
             Vec<Player>,
         )>,
         delta_sender: tokio::sync::mpsc::Sender<FxHashMap<u32, ChannelSubscriptionDelta>>,
     ) {
-        while let Ok((player_registry, mut channels)) = subscription_receiver.recv() {
+        #[derive(Default)]
+        struct PlayerSubscriptions {
+            pending_subscribe: RoaringBitmap,
+            subscribed: RoaringBitmap,
+        }
+
+        let mut player_subscriptions_map: FxHashMap<u64, PlayerSubscriptions> =
+            FxHashMap::default();
+
+        while let Ok((player_registry, channels_delta, channels, mut channel_bvh_data)) =
+            subscription_receiver.recv()
+        {
             let start = std::time::Instant::now();
 
             let mut deltas: FxHashMap<u32, ChannelSubscriptionDelta> = FxHashMap::default();
 
-            let channel_bvh = Bvh::build(&mut channels, ());
+            for (channel_id, subscribed_players) in channels_delta.subscribed_channels {
+                // If the channel has been removed since the players were subscribed, do nothing
+                if channels_delta.removed_channels.contains(channel_id) {
+                    continue;
+                }
+
+                for stream in subscribed_players.iter() {
+                    let Some(player_subscriptions) = player_subscriptions_map.get_mut(stream)
+                    else {
+                        error!("could not find player subscriptions for {stream}");
+                        continue;
+                    };
+
+                    // eprintln!("update bitmap adding stream {stream} to channel {channel_id}");
+                    assert!(player_subscriptions.subscribed.insert(channel_id));
+                    assert!(player_subscriptions.pending_subscribe.remove(channel_id));
+                }
+            }
+
+            if !channels_delta.removed_channels.is_empty() {
+                for player_subscriptions in player_subscriptions_map.values_mut() {
+                    player_subscriptions.pending_subscribe -= &channels_delta.removed_channels;
+                    player_subscriptions.subscribed -= &channels_delta.removed_channels;
+                }
+            }
+
+            // TODO calculate channel bvh data here
+            let channel_bvh = Bvh::build(&mut channel_bvh_data, ());
             let mut num_sub = 0;
             let mut num_unsub = 0;
 
@@ -882,6 +990,8 @@ impl BufferedEgress {
                 // SAFETY: we only get a mutable reference with a unique Arc reference so there are
                 // no mut references righ tnow
                 let player = unsafe { &*player.get() };
+
+                let mut player_subscriptions = player_subscriptions_map.entry(stream).or_default();
 
                 let mut channels_below_unsubscribe_radius = RoaringBitmap::new();
                 // let mut channels_below_subscribe_radius = RoaringBitmap::new();
@@ -937,7 +1047,10 @@ impl BufferedEgress {
                 );
                 let channels_below_subscribe_radius = &channels_below_unsubscribe_radius;
 
-                for channel_id in channels_below_subscribe_radius - &player.subscribed_channels {
+                let channels_to_subscribe = channels_below_subscribe_radius
+                    - &player_subscriptions.subscribed
+                    - &player_subscriptions.pending_subscribe;
+                for channel_id in &channels_to_subscribe {
                     let start3 = std::time::Instant::now();
                     // This channel is below the subscribe radius but is not currently subscribed. Subscribe to the channel
                     deltas
@@ -946,10 +1059,11 @@ impl BufferedEgress {
                         .new_pending_connections
                         .push(stream);
                 }
+                player_subscriptions.pending_subscribe |= channels_to_subscribe;
 
-                for channel_to_unsubscribe in
-                    &player.subscribed_channels - channels_below_unsubscribe_radius
-                {
+                let channels_to_unsubscribe =
+                    &player_subscriptions.subscribed - channels_below_unsubscribe_radius;
+                for channel_to_unsubscribe in &channels_to_unsubscribe {
                     let start3 = std::time::Instant::now();
 
                     num_unsub += 1;
@@ -959,8 +1073,13 @@ impl BufferedEgress {
                         .or_default()
                         .unsubscribed_connections
                         .insert(stream);
+
+                    // eprintln!("requesting removing stream {stream} to channel {channel_to_unsubscribe}");
+
+                    // assert!(player_subscribed_channels.remove(channel_to_unsubscribe));
                     total_unsub += start3.elapsed();
                 }
+                player_subscriptions.subscribed -= channels_to_unsubscribe;
             }
 
             tracing::warn!(
