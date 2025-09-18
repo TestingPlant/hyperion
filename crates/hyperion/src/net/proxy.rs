@@ -29,8 +29,8 @@ use crate::{
     net::{Channel, Compose, IoBuf, ProxyId, intermediate::IntermediateServerToProxyMessage},
     runtime::AsyncRuntime,
     simulation::{
-        ChunkPosition, EgressComm, Position, RequestSubscribeChannelPackets, StreamLookup,
-        entity_kind::EntityKind, packet_state,
+        ChunkPosition, EgressComm, Position, RequestSubscribeChannelPackets,
+        RequestSubscribeChannelsPackets, StreamLookup, entity_kind::EntityKind, packet_state,
     },
 };
 
@@ -223,16 +223,13 @@ async fn handle_proxy_messages(
                     };
 
                 command_channel.push(move |world: &mut World| {
-                    // TODO: Is it possible to avoid this second allocation?
-                    let channels = channels
+                    let requests = channels
                         .into_iter()
                         .filter_map(|(channel_id, cached)| {
                             match Entity::from_id(channel_id, world) {
-                                Ok(channel) => Some(RequestSubscribeChannelPackets {
-                                    channel,
-                                    requester: proxy_id,
-                                    cached,
-                                }),
+                                Ok(channel) => {
+                                    Some(RequestSubscribeChannelPackets { channel, cached })
+                                }
                                 Err(e) => {
                                     error!(
                                         "RequestSubscribeChannelPackets: channel id is invalid: \
@@ -244,8 +241,12 @@ async fn handle_proxy_messages(
                         })
                         .collect::<Vec<_>>();
 
-                    let mut events = world.resource_mut::<Events<RequestSubscribeChannelPackets>>();
-                    events.send_batch(channels);
+                    let mut events =
+                        world.resource_mut::<Events<RequestSubscribeChannelsPackets>>();
+                    events.send(RequestSubscribeChannelsPackets {
+                        requests,
+                        requester: proxy_id,
+                    });
                 });
             }
         }

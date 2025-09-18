@@ -598,6 +598,21 @@ impl IoBuf {
         Bytes::from_owner(buffer)
     }
 
+    pub(crate) fn unicast_proxy_message(
+        &self,
+        message: &hyperion_proto::ServerToProxyMessage<'_>,
+        proxy_id: ProxyId,
+    ) {
+        let buffer = Self::encode_proxy_message(&message);
+
+        let Some(egress_comm) = self.egress_comms.get(&proxy_id) else {
+            error!("invalid proxy id for unicast ({proxy_id:?})");
+            return;
+        };
+
+        egress_comm.tx.send(buffer.clone()).unwrap();
+    }
+
     pub(crate) fn add_proxy_message(&self, message: &IntermediateServerToProxyMessage<'_>) {
         if message.affected_by_proxy() {
             // Encode the message for each proxy before sending it
@@ -672,25 +687,6 @@ impl IoBuf {
     pub(crate) fn set_receive_broadcasts(&self, stream: ConnectionId) {
         self.add_proxy_message(&IntermediateServerToProxyMessage::SetReceiveBroadcasts(
             intermediate::SetReceiveBroadcasts { stream },
-        ));
-    }
-
-    pub(crate) fn send_subscribe_channel_packets(
-        &self,
-        channel: ChannelId,
-        receiver: ProxyId,
-        cache: bool,
-        packets: Option<&[u8]>,
-        exclude: Option<ConnectionId>,
-    ) {
-        self.add_proxy_message(&IntermediateServerToProxyMessage::SubscribeChannelPackets(
-            intermediate::SubscribeChannelPackets {
-                channel_id: channel.inner(),
-                receiver,
-                exclude,
-                cache,
-                data: packets,
-            },
         ));
     }
 

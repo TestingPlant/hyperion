@@ -12,7 +12,7 @@ use crate::{
         intermediate::{AddChannel, IntermediateServerToProxyMessage, UpdateChannelPositions},
     },
     simulation::{
-        ChannelCache, ChunkPosition, Pitch, Position, RequestSubscribeChannelPackets, Uuid,
+        ChannelCache, ChunkPosition, Pitch, Position, RequestSubscribeChannelsPackets, Uuid,
         Velocity, Yaw,
         blocks::{Blocks, chunk::Column},
         entity_kind::EntityKind,
@@ -113,7 +113,7 @@ fn update_channel_positions(
 }
 
 fn send_subscribe_channel_packets(
-    mut events: EventReader<'_, '_, RequestSubscribeChannelPackets>,
+    mut events: EventReader<'_, '_, RequestSubscribeChannelsPackets>,
     compose: Res<'_, Compose>,
     entity_query: Query<'_, '_, (&Uuid, &Position, &Pitch, &Yaw, &Velocity, &EntityKind)>,
     chunk_query: Query<'_, '_, &ChunkPosition>,
@@ -128,83 +128,100 @@ fn send_subscribe_channel_packets(
     >,
 ) {
     for event in events.read() {
-        let (mut cache_query, mut blocks) = set.p0();
-        let mut cache = match cache_query.get_mut(event.channel) {
-            Ok(cache) => cache,
-            Err(e) => {
-                error!("failed to send subscribe channel packets: ChannelCache query failed: {e}");
-                continue;
-            }
-        };
+        let channels = event
+            .requests
+            .iter()
+            .filter_map(|request| {
+                let (mut cache_query, mut blocks) = set.p0();
+                let mut cache = match cache_query.get_mut(request.channel) {
+                    Ok(cache) => cache,
+                    Err(e) => {
+                        error!(
+                            "failed to send subscribe channel packets: ChannelCache query failed: \
+                             {e}"
+                        );
+                        return None;
+                    }
+                };
 
-        let exclude = connection_query.get(event.channel).ok().copied();
+                let exclude = connection_query
+                    .get(request.channel)
+                    .ok()
+                    .map(|exclude| exclude.inner())
+                    .unwrap_or_default();
 
-        if cache.contains(&event.requester) {
-            // The cached version of the subscribe packets on the proxy is still valid, so let the
-            // proxy use its cache
+                if cache.contains(&event.requester) {
+                    // The cached version of the subscribe packets on the proxy is still valid, so let the
+                    // proxy use its cache
 
-            compose.io_buf().send_subscribe_channel_packets(
-                event.channel.into(),
-                event.requester,
-                true,
-                None,
-                exclude,
-            );
-            continue;
-        }
+                    return Some(hyperion_proto::SubscribeChannelPackets {
+                        channel_id: request.channel.id(),
+                        exclude,
+                        cache: true,
+                        data: None,
+                    });
+                }
 
-        let (should_cache, data) = match (
-            entity_query.get(event.channel),
-            chunk_query.get(event.channel),
-        ) {
-            (Ok((uuid, position, &pitch, &yaw, velocity, &entity_kind)), Err(_)) => {
-                // Entity subscribe packets are not cached
-                cache.remove(&event.requester);
-                (
-                    false,
-                    entity_subscribe_channel_packets(
-                        &compose,
-                        event.channel,
-                        uuid,
-                        position,
-                        pitch,
-                        yaw,
-                        velocity,
-                        entity_kind,
-                        set.p1(),
-                    ),
-                )
-            }
-            (Err(_), Ok(&chunk_position)) => {
-                // Chunk subscribe packets are cached
-                cache.insert(event.requester);
-                (
-                    true,
-                    chunk_subscribe_channel_packets(&mut blocks, chunk_position),
-                )
-            }
-            (Ok(_), Ok(_)) => {
-                error!(
-                    "failed to send subscribe channel packets: channel should not match both the \
-                     entity and chunk queries"
-                );
-                continue;
-            }
-            (Err(_), Err(_)) => {
-                error!(
-                    "failed to send subscribe channel packets: channel should match the either \
-                     the entity or chunk query"
-                );
-                continue;
-            }
-        };
+                let (should_cache, data) = match (
+                    entity_query.get(request.channel),
+                    chunk_query.get(request.channel),
+                ) {
+                    (Ok((uuid, position, &pitch, &yaw, velocity, &entity_kind)), Err(_)) => {
+                        // Entity subscribe packets are not cached
+                        cache.remove(&event.requester);
+                        (
+                            false,
+                            entity_subscribe_channel_packets(
+                                &compose,
+                                request.channel,
+                                uuid,
+                                position,
+                                pitch,
+                                yaw,
+                                velocity,
+                                entity_kind,
+                                set.p1(),
+                            ),
+                        )
+                    }
+                    (Err(_), Ok(&chunk_position)) => {
+                        // Chunk subscribe packets are cached
+                        cache.insert(event.requester);
+                        (
+                            true,
+                            chunk_subscribe_channel_packets(&mut blocks, chunk_position),
+                        )
+                    }
+                    (Ok(_), Ok(_)) => {
+                        error!(
+                            "failed to send subscribe channel packets: channel should not match \
+                             both the entity and chunk queries"
+                        );
+                        return None;
+                    }
+                    (Err(_), Err(_)) => {
+                        error!(
+                            "failed to send subscribe channel packets: channel should match the \
+                             either the entity or chunk query"
+                        );
+                        return None;
+                    }
+                };
 
-        compose.io_buf().send_subscribe_channel_packets(
-            event.channel.into(),
+                return Some(hyperion_proto::SubscribeChannelPackets {
+                    channel_id: request.channel.id(),
+                    exclude,
+                    cache: should_cache,
+                    data: Some(data),
+                });
+            })
+            .collect::<Vec<_>>();
+
+        let message = hyperion_proto::SubscribeChannelsPackets { channels };
+
+        compose.io_buf().unicast_proxy_message(
+            &hyperion_proto::ServerToProxyMessage::SubscribeChannelsPackets(message),
             event.requester,
-            should_cache,
-            Some(&data),
-            exclude,
         );
     }
 }

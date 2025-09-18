@@ -98,7 +98,7 @@ proptest = '1.5.0'
 quote = '1.0.39'
 rand = "0.9.1"
 rayon = '1.10.0'
-rkyv = '0.8.8'
+rkyv = { version = '0.8.8', features = ['bytes-1'] }
 rustls = { version = '0.23.31', default-features = false, features = ['logging', 'std', 'tls12'] }
 rustls-pki-types = '1.12.0'
 rustls-webpki = '0.103.4'

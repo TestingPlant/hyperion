@@ -76,7 +76,7 @@ pub enum EgressInstruction {
     },
     Ping {
         sender: oneshot::Sender<()>,
-    }
+    },
 }
 
 pub struct Egress {

@@ -699,7 +699,7 @@ impl Plugin for SimPlugin {
             MetadataPlugin,
         ));
 
-        app.add_event::<RequestSubscribeChannelPackets>();
+        app.add_event::<RequestSubscribeChannelsPackets>();
         app.add_event::<event::ItemDropEvent>();
         app.add_event::<event::ItemInteract>();
         app.add_event::<event::SetSkin>();
@@ -722,13 +722,20 @@ impl Plugin for SimPlugin {
     }
 }
 
-/// Event sent when the proxy requests packets to send to a player who has subscribed to a channel.
-#[derive(Event)]
 pub struct RequestSubscribeChannelPackets {
     pub channel: Entity,
-    pub requester: ProxyId,
     /// Whether the proxy already has the previous subscribe packets cached
     pub cached: bool,
+}
+
+/// Event sent when the proxy requests packets to send to players who has subscribed to particular channels.
+#[derive(Event)]
+pub struct RequestSubscribeChannelsPackets {
+    /// List of requests. Each request is guaranteed by the proxy to point to a unique channel.
+    pub requests: Vec<RequestSubscribeChannelPackets>,
+
+    /// Proxy that requested these packets
+    pub requester: ProxyId,
 }
 
 #[derive(Component)]

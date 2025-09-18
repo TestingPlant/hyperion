@@ -108,7 +108,7 @@ pub enum ServerToProxyMessageType {
     AddChannel,
     UpdateChannelPositions,
     RemoveChannel,
-    SubscribeChannelPackets,
+    SubscribeChannelsPackets,
     BroadcastGlobal,
     BroadcastLocal,
     BroadcastChannel,
@@ -582,8 +582,8 @@ impl BufferedEgress {
             ArchivedServerToProxyMessage::RemoveChannel(_) => {
                 ServerToProxyMessageType::RemoveChannel
             }
-            ArchivedServerToProxyMessage::SubscribeChannelPackets(_) => {
-                ServerToProxyMessageType::SubscribeChannelPackets
+            ArchivedServerToProxyMessage::SubscribeChannelsPackets(_) => {
+                ServerToProxyMessageType::SubscribeChannelsPackets
             }
             ArchivedServerToProxyMessage::BroadcastGlobal(_) => {
                 ServerToProxyMessageType::BroadcastGlobal
@@ -700,79 +700,87 @@ impl BufferedEgress {
                     .removed_channels
                     .insert(packet.channel_id.into());
             }
-            ArchivedServerToProxyMessage::SubscribeChannelPackets(packet) => {
-                let exclude = u64::from(packet.exclude);
-                let channel_id = packet.channel_id.into();
-                let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
-                    error!("server sent SubscribeChannelPackets for a channel that does not exist");
-                    return;
-                };
-
-                let pending_connections =
-                    std::mem::take(&mut channel.subscribers.pending_connections);
-
-                if pending_connections.is_empty() {
-                    warn!(
-                        "server sent SubscribeChannelPackets but there are no pending subscribers"
-                    );
-                    return;
-                }
-
-                // TODO no box
-
-                let data = if let Some(data) =
-                    rkyv::deserialize::<Option<Box<[u8]>>, rkyv::rancor::Error>(&packet.data)
-                        .unwrap()
-                {
-                    let bytes = Bytes::from(data);
-                    channel.cached_subscribe_packets = packet.cache.then(|| bytes.clone());
-                    bytes
-                } else {
-                    let Some(bytes) = channel.cached_subscribe_packets.clone() else {
+            ArchivedServerToProxyMessage::SubscribeChannelsPackets(packet) => {
+                for update in packet.channels.iter() {
+                    let exclude = u64::from(update.exclude);
+                    let channel_id = update.channel_id.into();
+                    let Some(channel) = self.channel_manager.channels.get_mut(&channel_id) else {
                         error!(
-                            "server sent SubscribeChannelPackets without subscribe packets, but \
-                             the subscribe packets are not cached on the proxy"
+                            "server sent SubscribeChannelPackets for a channel that does not exist"
                         );
                         return;
                     };
-                    if !packet.cache {
-                        channel.cached_subscribe_packets = None;
+
+                    let pending_connections =
+                        std::mem::take(&mut channel.subscribers.pending_connections);
+
+                    if pending_connections.is_empty() {
+                        warn!(
+                            "server sent SubscribeChannelPackets but there are no pending \
+                             subscribers"
+                        );
+                        return;
                     }
-                    bytes
-                };
 
-                // TODO use max pending bytes
-                // for stream in pending_connections.iter() {
-                // eprintln!("adding stream {stream} to channel {channel_id}");
-                // }
+                    // TODO no box
 
-                // TODO the clone here is clearly somewhat expensive
-                // let start5 = std::time::Instant::now();
-                self.egress.block_until_flushed();
-                // eprintln!("took {:?} to flush", start.elapsed());
-                let start4 = std::time::Instant::now();
-                let Some(foo) = Arc::get_mut(&mut channel.subscribers.subscribed_connections) else {
-                    error!("nooo! {}", Arc::strong_count(&channel.subscribers.subscribed_connections));
-                    return;
-                };
+                    let data = if let Some(data) =
+                        rkyv::deserialize::<Option<Bytes>, rkyv::rancor::Error>(&update.data)
+                            .unwrap()
+                    {
+                        channel.cached_subscribe_packets = update.cache.then(|| data.clone());
+                        data
+                    } else {
+                        let Some(bytes) = channel.cached_subscribe_packets.clone() else {
+                            error!(
+                                "server sent SubscribeChannelPackets without subscribe updates, \
+                                 but the subscribe updates are not cached on the proxy"
+                            );
+                            return;
+                        };
+                        if !update.cache {
+                            channel.cached_subscribe_packets = None;
+                        }
+                        bytes
+                    };
 
-                self.total_time_in_clone_subs += start4.elapsed();
-                let start3 = std::time::Instant::now();
-                foo.extend(pending_connections.iter().copied());
-                self.total_time_in_update_subs += start3.elapsed();
-                self.channels_delta
-                    .subscribed_channels
-                    .push((channel_id, pending_connections.clone()));
-                let start2 = std::time::Instant::now();
-                self.egress.execute(EgressInstruction::Broadcast {
-                    streams: pending_connections.into(),
-                    exclude,
-                    data,
-                });
+                    // TODO use max pending bytes
+                    // for stream in pending_connections.iter() {
+                    // eprintln!("adding stream {stream} to channel {channel_id}");
+                    // }
 
-                //self.egress.maybe_pending = false;
+                    // TODO the clone here is clearly somewhat expensive
+                    // let start5 = std::time::Instant::now();
+                    self.egress.block_until_flushed();
+                    // eprintln!("took {:?} to flush", start.elapsed());
+                    let start4 = std::time::Instant::now();
+                    let Some(foo) = Arc::get_mut(&mut channel.subscribers.subscribed_connections)
+                    else {
+                        error!(
+                            "nooo! {}",
+                            Arc::strong_count(&channel.subscribers.subscribed_connections)
+                        );
+                        return;
+                    };
 
-                self.total_time_in_write += start2.elapsed();
+                    self.total_time_in_clone_subs += start4.elapsed();
+                    let start3 = std::time::Instant::now();
+                    foo.extend(pending_connections.iter().copied());
+                    self.total_time_in_update_subs += start3.elapsed();
+                    self.channels_delta
+                        .subscribed_channels
+                        .push((channel_id, pending_connections.clone()));
+                    let start2 = std::time::Instant::now();
+                    self.egress.execute(EgressInstruction::Broadcast {
+                        streams: pending_connections.into(),
+                        exclude,
+                        data,
+                    });
+
+                    // self.egress.maybe_pending = false;
+
+                    self.total_time_in_write += start2.elapsed();
+                }
             }
             ArchivedServerToProxyMessage::BroadcastGlobal(packet) => {
                 let data =

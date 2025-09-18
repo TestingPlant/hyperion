@@ -4014,6 +4014,7 @@ dependencies = [
 name = "hyperion-proto"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "glam 0.29.3",
  "rkyv",
 ]

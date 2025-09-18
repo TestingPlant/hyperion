@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use rkyv::{
     Archive, Deserialize, Serialize,
     with::{InlineAsBox, Map},
@@ -46,8 +47,8 @@ pub struct RemoveChannel {
     pub channel_id: u32,
 }
 
-#[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq)]
-pub struct SubscribeChannelPackets<'a> {
+#[derive(Archive, Deserialize, Serialize, Clone, PartialEq)]
+pub struct SubscribeChannelPackets {
     pub channel_id: u32,
     pub exclude: u64,
 
@@ -56,8 +57,13 @@ pub struct SubscribeChannelPackets<'a> {
 
     /// Data to be sent to pending subscribers. If this is set to `None`, the previous cached response will
     /// be used.
-    #[rkyv(with = Map<InlineAsBox>)]
-    pub data: Option<&'a [u8]>,
+    pub data: Option<Bytes>,
+}
+
+#[derive(Archive, Deserialize, Serialize, Clone, PartialEq)]
+pub struct SubscribeChannelsPackets {
+    /// List of subscribe packets for each channel. Each element must point to a unique channel id.
+    pub channels: Vec<SubscribeChannelPackets>,
 }
 
 #[derive(Archive, Deserialize, Serialize, Clone, Copy, PartialEq)]
@@ -122,7 +128,7 @@ pub enum ServerToProxyMessage<'a> {
     AddChannel(AddChannel<'a>),
     UpdateChannelPositions(UpdateChannelPositions<'a>),
     RemoveChannel(RemoveChannel),
-    SubscribeChannelPackets(SubscribeChannelPackets<'a>),
+    SubscribeChannelsPackets(SubscribeChannelsPackets),
     BroadcastGlobal(BroadcastGlobal<'a>),
     BroadcastLocal(BroadcastLocal<'a>),
     BroadcastChannel(BroadcastChannel<'a>),

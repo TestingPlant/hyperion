@@ -32,16 +32,6 @@ pub struct RemoveChannel {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SubscribeChannelPackets<'a> {
-    pub channel_id: u32,
-    pub receiver: ProxyId,
-    pub exclude: Option<ConnectionId>,
-
-    pub cache: bool,
-    pub data: Option<&'a [u8]>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SetReceiveBroadcasts {
     pub stream: ConnectionId,
 }
@@ -92,7 +82,6 @@ pub enum IntermediateServerToProxyMessage<'a> {
     AddChannel(AddChannel<'a>),
     UpdateChannelPositions(UpdateChannelPositions<'a>),
     RemoveChannel(RemoveChannel),
-    SubscribeChannelPackets(SubscribeChannelPackets<'a>),
     BroadcastGlobal(BroadcastGlobal<'a>),
     BroadcastLocal(BroadcastLocal<'a>),
     BroadcastChannel(BroadcastChannel<'a>),
@@ -109,7 +98,6 @@ impl IntermediateServerToProxyMessage<'_> {
     pub const fn affected_by_proxy(&self) -> bool {
         match self {
             Self::UpdatePlayerPositions(_)
-            | Self::SubscribeChannelPackets(_)
             | Self::BroadcastGlobal(_)
             | Self::BroadcastLocal(_)
             | Self::BroadcastChannel(_)
@@ -165,19 +153,6 @@ impl IntermediateServerToProxyMessage<'_> {
                     channel_id: message.channel_id,
                 },
             )),
-            Self::SubscribeChannelPackets(message) => (message.receiver == proxy_id).then(|| {
-                ServerToProxyMessage::SubscribeChannelPackets(
-                    hyperion_proto::SubscribeChannelPackets {
-                        channel_id: message.channel_id,
-                        exclude: message
-                            .exclude
-                            .and_then(filter_map_connection_id)
-                            .unwrap_or_default(),
-                        cache: message.cache,
-                        data: message.data,
-                    },
-                )
-            }),
             Self::BroadcastGlobal(message) => Some(ServerToProxyMessage::BroadcastGlobal(
                 hyperion_proto::BroadcastGlobal {
                     exclude: message

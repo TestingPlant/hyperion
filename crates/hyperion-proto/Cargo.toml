@@ -1,6 +1,7 @@
 [build-dependencies]
 
 [dependencies]
+bytes = {workspace = true}
 rkyv = {workspace = true}
 glam = {workspace = true}
 
