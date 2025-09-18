@@ -747,11 +747,15 @@ impl BufferedEgress {
                 // }
 
                 // TODO the clone here is clearly somewhat expensive
-                dbg!(Arc::strong_count(
-                    &channel.subscribers.subscribed_connections
-                ));
+                // let start5 = std::time::Instant::now();
+                self.egress.block_until_flushed();
+                // eprintln!("took {:?} to flush", start.elapsed());
                 let start4 = std::time::Instant::now();
-                let foo = Arc::make_mut(&mut channel.subscribers.subscribed_connections);
+                let Some(foo) = Arc::get_mut(&mut channel.subscribers.subscribed_connections) else {
+                    error!("nooo! {}", Arc::strong_count(&channel.subscribers.subscribed_connections));
+                    return;
+                };
+
                 self.total_time_in_clone_subs += start4.elapsed();
                 let start3 = std::time::Instant::now();
                 foo.extend(pending_connections.iter().copied());
@@ -765,6 +769,8 @@ impl BufferedEgress {
                     exclude,
                     data,
                 });
+
+                //self.egress.maybe_pending = false;
 
                 self.total_time_in_write += start2.elapsed();
             }

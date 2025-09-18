@@ -74,6 +74,9 @@ pub enum EgressInstruction {
         exclude: u64,
         data: Bytes,
     },
+    Ping {
+        sender: oneshot::Sender<()>,
+    }
 }
 
 pub struct Egress {
@@ -81,6 +84,7 @@ pub struct Egress {
     pub(crate) player_registry: Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
     pub(crate) server_sender: ServerSender,
     pub(crate) egress_sender: kanal::Sender<EgressInstruction>,
+    pub(crate) maybe_pending: bool,
 }
 
 impl Egress {
@@ -99,6 +103,7 @@ impl Egress {
             player_registry: Arc::new(FxHashMap::default()),
             server_sender,
             egress_sender,
+            maybe_pending: false,
         }
     }
 
@@ -141,8 +146,20 @@ impl Egress {
         }
     }
 
-    pub fn execute(&self, instruction: EgressInstruction) {
+    pub fn execute(&mut self, instruction: EgressInstruction) {
+        self.maybe_pending = true;
         self.egress_sender.send(instruction).unwrap();
+    }
+
+    pub fn block_until_flushed(&mut self) {
+        if !self.maybe_pending {
+            return;
+        }
+
+        let (sender, receiver) = oneshot::channel();
+        self.execute(EgressInstruction::Ping { sender });
+        let _ = receiver.recv();
+        self.maybe_pending = false;
     }
 
     #[instrument(skip_all)]
@@ -272,6 +289,9 @@ impl Egress {
                         sender.send_maybe_shared_ref(&data, MAX_SHARED_COPY);
                         notify.notify_waiters();
                     });
+                }
+                EgressInstruction::Ping { sender } => {
+                    let _result = sender.send(());
                 }
             }
         }
