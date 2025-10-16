@@ -131,6 +131,7 @@ pub struct BufferedEgress {
     total_time_in_sub: std::time::Duration,
     total_time_in_clone_subs: std::time::Duration,
     total_time_in_update_subs: std::time::Duration,
+    block_time: std::time::Duration,
     timings: EnumMap<ServerToProxyMessageType, std::time::Duration>,
     behind: bool,
 
@@ -142,6 +143,7 @@ pub struct BufferedEgress {
     )>,
     delta_receiver: tokio::sync::mpsc::Receiver<FxHashMap<u32, ChannelSubscriptionDelta>>,
     pending_subscription_deltas: bool,
+    pending_subscription_packets: bool,
 
     channels_delta: ChannelsDelta,
 }
@@ -170,12 +172,14 @@ impl BufferedEgress {
             total_time_in_sub: std::time::Duration::from_secs(0),
             total_time_in_clone_subs: std::time::Duration::from_secs(0),
             total_time_in_update_subs: std::time::Duration::from_secs(0),
+            block_time: std::time::Duration::from_secs(0),
             timings: EnumMap::default(),
             behind: false,
 
             subscription_sender,
             delta_receiver,
             pending_subscription_deltas: false,
+            pending_subscription_packets: false,
             channels_delta: ChannelsDelta::default(),
         }
     }
@@ -223,6 +227,10 @@ impl BufferedEgress {
                     }
 
                     self.egress
+                        .num_pending
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    self.egress
                         .egress_sender
                         .send(EgressInstruction::Broadcast {
                             streams: delta.unsubscribed_connections.into(),
@@ -234,6 +242,8 @@ impl BufferedEgress {
             }
 
             if !requested_subscriptions.is_empty() {
+                self.pending_subscription_packets = true;
+
                 let request = rkyv::to_bytes::<rkyv::rancor::Error>(
                     &hyperion_proto::ProxyToServerMessage::RequestSubscribeChannelPackets(
                         hyperion_proto::RequestSubscribeChannelPackets {
@@ -273,7 +283,7 @@ impl BufferedEgress {
             channel.subscribers.chunk_position = position;
         }
 
-        if self.pending_subscription_deltas || self.behind {
+        if self.pending_subscription_deltas || self.pending_subscription_packets || self.behind {
             return;
         }
 
@@ -701,6 +711,15 @@ impl BufferedEgress {
                     .insert(packet.channel_id.into());
             }
             ArchivedServerToProxyMessage::SubscribeChannelsPackets(packet) => {
+                if !self.pending_subscription_packets {
+                    error!("server unexpectedly sent subscribe channel packets");
+                }
+                self.pending_subscription_packets = false;
+
+                let start5 = std::time::Instant::now();
+                let aaa = self.egress.block_until_flushed();
+                self.block_time += start5.elapsed();
+                eprintln!("took {:?} to flush {aaa} packets", start.elapsed());
                 for update in packet.channels.iter() {
                     let exclude = u64::from(update.exclude);
                     let channel_id = update.channel_id.into();
@@ -750,18 +769,20 @@ impl BufferedEgress {
                     // }
 
                     // TODO the clone here is clearly somewhat expensive
-                    // let start5 = std::time::Instant::now();
-                    self.egress.block_until_flushed();
-                    // eprintln!("took {:?} to flush", start.elapsed());
                     let start4 = std::time::Instant::now();
-                    let Some(foo) = Arc::get_mut(&mut channel.subscribers.subscribed_connections)
-                    else {
-                        error!(
-                            "nooo! {}",
-                            Arc::strong_count(&channel.subscribers.subscribed_connections)
-                        );
-                        return;
-                    };
+                    let foo = Arc::get_mut(&mut channel.subscribers.subscribed_connections)
+                        .unwrap_or_else(|| {
+                            // Ideally this should never be reached because cloning this HashSet has been
+                            // shown to be expensive. This is why the egress instruction queue is
+                            // flushed beforehand so we can ensure that there are no other strong
+                            // references.
+                            //                        error!(
+                            //                            "could not get subscribed connections mutably due to {} strong references, this is unexpected and will result in additional memory copies and allocations",
+                            //                            Arc::strong_count(&channel.subscribers.subscribed_connections)
+                            //                        );
+                            todo!()
+                            // Arc::make_mut(&mut channel.subscribers.subscribed_connections)
+                        });
 
                     self.total_time_in_clone_subs += start4.elapsed();
                     let start3 = std::time::Instant::now();
@@ -922,12 +943,13 @@ impl BufferedEgress {
                         "proxy is running too slow - it is {delay} seconds behind on processing \
                          server to proxy messages and {} game ticks have elapsed since the server \
                          to proxy task has yielded execution. (write {:?} / sub {:?} / clone {:?} \
-                         / update {:?} / total {:?}), {:#?}",
+                         / update {:?} / block time {:?} / total {:?}), {:#?}",
                         self.ticks_elapsed_since_yield,
                         self.total_time_in_write,
                         self.total_time_in_sub,
                         self.total_time_in_clone_subs,
                         self.total_time_in_update_subs,
+                        self.block_time,
                         self.total_time,
                         &self.timings,
                     );

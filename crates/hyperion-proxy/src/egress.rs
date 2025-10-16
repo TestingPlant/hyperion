@@ -8,6 +8,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use enum_map::{Enum, EnumMap};
 use hyperion_proto::{ArchivedSetReceiveBroadcasts, ArchivedShutdown};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -79,23 +80,37 @@ pub enum EgressInstruction {
     },
 }
 
+#[derive(Debug, Enum, Copy, Clone, PartialEq, Eq)]
+pub enum EgressInstructionType {
+    AddPlayer,
+    ShutdownPlayer,
+    RemovePlayer,
+    Unicast,
+    Broadcast,
+    BroadcastGlobal,
+    Ping,
+}
+
 pub struct Egress {
     // TODO remove SyncUnsafeCell
     pub(crate) player_registry: Arc<FxHashMap<u64, CloneSyncUnsafeCell<PlayerHandle>>>,
     pub(crate) server_sender: ServerSender,
     pub(crate) egress_sender: kanal::Sender<EgressInstruction>,
     pub(crate) maybe_pending: bool,
+    pub(crate) num_pending: Arc<AtomicUsize>,
 }
 
 impl Egress {
     #[must_use]
     pub fn new(server_sender: ServerSender) -> Self {
         let (egress_sender, egress_receiver) = kanal::unbounded();
+        let num_pending = Arc::new(AtomicUsize::new(0));
+        let num_pending_2 = num_pending.clone();
 
         std::thread::Builder::new()
             .name("egress_writer".to_string())
             .spawn(move || {
-                Self::writer(egress_receiver);
+                Self::writer(egress_receiver, num_pending_2);
             })
             .unwrap();
 
@@ -104,6 +119,7 @@ impl Egress {
             server_sender,
             egress_sender,
             maybe_pending: false,
+            num_pending,
         }
     }
 
@@ -148,18 +164,21 @@ impl Egress {
 
     pub fn execute(&mut self, instruction: EgressInstruction) {
         self.maybe_pending = true;
+        self.num_pending.fetch_add(1, atomic::Ordering::Relaxed);
         self.egress_sender.send(instruction).unwrap();
     }
 
-    pub fn block_until_flushed(&mut self) {
+    pub fn block_until_flushed(&mut self) -> usize {
+        let num = self.num_pending.load(atomic::Ordering::Relaxed);
         if !self.maybe_pending {
-            return;
+            return num;
         }
 
         let (sender, receiver) = oneshot::channel();
         self.execute(EgressInstruction::Ping { sender });
         let _ = receiver.recv();
         self.maybe_pending = false;
+        num
     }
 
     #[instrument(skip_all)]
@@ -174,7 +193,7 @@ impl Egress {
         player.get_mut().enable_receive_broadcasts();
     }
 
-    fn writer(receiver: kanal::Receiver<EgressInstruction>) {
+    fn writer(receiver: kanal::Receiver<EgressInstruction>, num_pending: Arc<AtomicUsize>) {
         let mut writers: FxHashMap<
             u64,
             SyncUnsafeCell<
@@ -185,7 +204,22 @@ impl Egress {
                 )>,
             >,
         > = FxHashMap::default();
+
+        let mut timings: EnumMap<EgressInstructionType, std::time::Duration> = EnumMap::default();
+
         while let Ok(instruction) = receiver.recv() {
+            let ty = match &instruction {
+                EgressInstruction::AddPlayer { .. } => EgressInstructionType::AddPlayer,
+                EgressInstruction::ShutdownPlayer { .. } => EgressInstructionType::ShutdownPlayer,
+                EgressInstruction::RemovePlayer { .. } => EgressInstructionType::RemovePlayer,
+                EgressInstruction::Unicast { .. } => EgressInstructionType::Unicast,
+                EgressInstruction::Broadcast { .. } => EgressInstructionType::Broadcast,
+                EgressInstruction::BroadcastGlobal { .. } => EgressInstructionType::BroadcastGlobal,
+                EgressInstruction::Ping { .. } => EgressInstructionType::Ping,
+            };
+
+            let start = std::time::Instant::now();
+
             match instruction {
                 EgressInstruction::AddPlayer {
                     stream,
@@ -245,34 +279,74 @@ impl Egress {
                     exclude,
                     data,
                 } => {
-                    (*streams).par_iter().for_each(|&stream| {
-                        if stream == exclude {
-                            return;
-                        }
+                    // TODO dry
+                    if streams.len() < 256 {
+                        (*streams).iter().for_each(|&stream| {
+                            if stream == exclude {
+                                return;
+                            }
 
-                        let Some(player) = writers.get(&stream) else {
-                            warn!("EgressInstruction::Broadcast used invalid stream id {stream:?}");
-                            return;
-                        };
+                            let Some(player) = writers.get(&stream) else {
+                                warn!(
+                                    "EgressInstruction::Broadcast used invalid stream id \
+                                     {stream:?}"
+                                );
+                                return;
+                            };
 
-                        // SAFETY: Since streams is stored as a HashSet, there cannot be duplicate
-                        // keys, so there cannot be any other code currently holding a reference to
-                        // this player at the time.In addition, this will not clone the player
-                        // while a mutable reference is held.
-                        let player = unsafe { &mut *player.get() };
+                            // SAFETY: Since streams is stored as a HashSet, there cannot be duplicate
+                            // keys, so there cannot be any other code currently holding a reference to
+                            // this player at the time.In addition, this will not clone the player
+                            // while a mutable reference is held.
+                            let player = unsafe { &mut *player.get() };
 
-                        let Some((sender, notify, total_bytes_pending_send)) = player else {
-                            warn!(
-                                "EgressInstruction::Broadcast used stream id {stream:?} which has \
-                                 already been shut down"
-                            );
-                            return;
-                        };
+                            let Some((sender, notify, total_bytes_pending_send)) = player else {
+                                warn!(
+                                    "EgressInstruction::Broadcast used stream id {stream:?} which \
+                                     has already been shut down"
+                                );
+                                return;
+                            };
 
-                        total_bytes_pending_send.fetch_add(data.len(), atomic::Ordering::Relaxed);
-                        sender.send_maybe_shared_ref(&data, MAX_SHARED_COPY);
-                        notify.notify_waiters();
-                    });
+                            total_bytes_pending_send
+                                .fetch_add(data.len(), atomic::Ordering::Relaxed);
+                            sender.send_maybe_shared_ref(&data, MAX_SHARED_COPY);
+                            notify.notify_waiters();
+                        });
+                    } else {
+                        (*streams).par_iter().for_each(|&stream| {
+                            if stream == exclude {
+                                return;
+                            }
+
+                            let Some(player) = writers.get(&stream) else {
+                                warn!(
+                                    "EgressInstruction::Broadcast used invalid stream id \
+                                     {stream:?}"
+                                );
+                                return;
+                            };
+
+                            // SAFETY: Since streams is stored as a HashSet, there cannot be duplicate
+                            // keys, so there cannot be any other code currently holding a reference to
+                            // this player at the time.In addition, this will not clone the player
+                            // while a mutable reference is held.
+                            let player = unsafe { &mut *player.get() };
+
+                            let Some((sender, notify, total_bytes_pending_send)) = player else {
+                                warn!(
+                                    "EgressInstruction::Broadcast used stream id {stream:?} which \
+                                     has already been shut down"
+                                );
+                                return;
+                            };
+
+                            total_bytes_pending_send
+                                .fetch_add(data.len(), atomic::Ordering::Relaxed);
+                            sender.send_maybe_shared_ref(&data, MAX_SHARED_COPY);
+                            notify.notify_waiters();
+                        });
+                    }
                 }
                 EgressInstruction::BroadcastGlobal { exclude, data } => {
                     writers.par_iter_mut().for_each(|(&stream, player)| {
@@ -291,9 +365,14 @@ impl Egress {
                     });
                 }
                 EgressInstruction::Ping { sender } => {
+                    dbg!(&timings);
                     let _result = sender.send(());
                 }
             }
+
+            timings[ty] += start.elapsed();
+
+            num_pending.fetch_sub(1, atomic::Ordering::Relaxed);
         }
     }
 }
