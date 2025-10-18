@@ -66,7 +66,10 @@ impl Section {
         })
     }
 
-    // returns true if the block state was changed
+    // Returns true if the block state was changed
+    //
+    // The caller is expected to call [`ColumnData::invalidate_cache`] after calling this
+    // function if this changes a block state
     pub fn set_delta(&mut self, idx: u16, new: BlockState) -> BlockState {
         debug_assert_lt!(idx, 4096);
 

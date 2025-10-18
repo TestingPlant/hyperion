@@ -14,7 +14,7 @@ use crate::{
     simulation::{
         ChannelCache, ChunkPosition, Pitch, Position, RequestSubscribeChannelPackets, Uuid,
         Velocity, Yaw,
-        blocks::{Blocks, GetChunk},
+        blocks::{Blocks, chunk::Column},
         entity_kind::EntityKind,
         metadata::{MetadataChanges, get_and_clear_metadata},
     },
@@ -114,15 +114,21 @@ fn update_channel_positions(
 
 fn send_subscribe_channel_packets(
     mut events: EventReader<'_, '_, RequestSubscribeChannelPackets>,
-    blocks: Res<'_, Blocks>,
     compose: Res<'_, Compose>,
     entity_query: Query<'_, '_, (&Uuid, &Position, &Pitch, &Yaw, &Velocity, &EntityKind)>,
     chunk_query: Query<'_, '_, &ChunkPosition>,
     connection_query: Query<'_, '_, &ConnectionId>,
-    mut set: ParamSet<'_, '_, (Query<'_, '_, &mut ChannelCache>, &World)>,
+    mut set: ParamSet<
+        '_,
+        '_,
+        (
+            (Query<'_, '_, &mut ChannelCache>, ResMut<'_, Blocks>),
+            &World,
+        ),
+    >,
 ) {
     for event in events.read() {
-        let mut cache_query = set.p0();
+        let (mut cache_query, mut blocks) = set.p0();
         let mut cache = match cache_query.get_mut(event.channel) {
             Ok(cache) => cache,
             Err(e) => {
@@ -174,7 +180,7 @@ fn send_subscribe_channel_packets(
                 cache.insert(event.requester);
                 (
                     true,
-                    chunk_subscribe_channel_packets(&blocks, chunk_position),
+                    chunk_subscribe_channel_packets(&mut blocks, chunk_position),
                 )
             }
             (Ok(_), Ok(_)) => {
@@ -280,19 +286,16 @@ fn entity_subscribe_channel_packets(
     packet_buf.freeze()
 }
 
-fn chunk_subscribe_channel_packets(blocks: &Blocks, chunk_position: ChunkPosition) -> Bytes {
-    match blocks.get_cached_or_load(*chunk_position) {
-        GetChunk::Loaded(chunk) => {
-            // TODO update base packet bytes when chunk changes
-            chunk.base_packet_bytes.clone()
-        }
-        GetChunk::Loading => {
+fn chunk_subscribe_channel_packets(blocks: &mut Blocks, chunk_position: ChunkPosition) -> Bytes {
+    blocks.get_loaded_chunk_mut(*chunk_position).map_or_else(
+        || {
             error!(
                 "failed to create subscribe channel packets for chunk channel: chunk is unloaded"
             );
             Bytes::new()
-        }
-    }
+        },
+        Column::bytes,
+    )
 }
 
 pub struct ChannelPlugin;

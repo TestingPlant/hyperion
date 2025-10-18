@@ -59,9 +59,6 @@ mod packet;
 /// A chunk which has been loaded into memory.
 #[derive(Debug)]
 pub struct Column {
-    /// The raw (usually compressed) bytes of the chunk that are sent to the client via the Minecraft protocol.
-    pub base_packet_bytes: Bytes,
-
     /// The actual chunk data that is "uncompressed". It uses a palette to store the actual data. This is usually used
     /// for obtaining the actual data from the chunk such as getting the block state of a block at a given position.
     pub data: ColumnData,
@@ -74,12 +71,8 @@ fn y_index(y: i16) -> u16 {
 }
 
 impl Column {
-    pub const fn new(base_packet_bytes: Bytes, data: ColumnData, position: IVec2) -> Self {
-        Self {
-            base_packet_bytes,
-            data,
-            position,
-        }
+    pub const fn new(data: ColumnData, position: IVec2) -> Self {
+        Self { data, position }
     }
 
     pub fn sections(&self) -> impl Iterator<Item = (IVec3, &Section)> + '_ {
@@ -137,8 +130,8 @@ impl Column {
             })
     }
 
-    pub fn bytes(&self) -> Bytes {
-        self.base_packet_bytes.clone()
+    pub fn bytes(&mut self) -> Bytes {
+        self.data.base_packet_bytes(self.position)
     }
 
     #[expect(unused, reason = "might be useful in the future")]

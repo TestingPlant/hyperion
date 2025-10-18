@@ -173,15 +173,9 @@ fn empty_column(position: I16Vec2) -> Column {
     let unloaded = ColumnData::new_with(CHUNK_HEIGHT_SPAN, Section::empty_sky);
     let position = position.as_ivec2();
 
-    let bytes = STATE.with_borrow_mut(|state| {
-        encode_chunk_packet(&unloaded, position, state)
-            .unwrap()
-            .unwrap()
-    });
-
     debug_assert_eq!(unloaded.height(), CHUNK_HEIGHT_SPAN);
 
-    Column::new(bytes.freeze(), unloaded, position)
+    Column::new(unloaded, position)
 }
 
 async fn load_chunk(position: I16Vec2, shared: &WorldShared) -> anyhow::Result<Column> {
@@ -214,23 +208,17 @@ async fn load_chunk(position: I16Vec2, shared: &WorldShared) -> anyhow::Result<C
         }
     };
 
-    STATE.with_borrow_mut(|state| {
-        let position = position.as_ivec2();
-        let Ok(Some(bytes)) = encode_chunk_packet(&chunk, position, state) else {
-            bail!("failed to encode chunk {position:?}");
-        };
+    let position = position.as_ivec2();
+    let loaded_chunk = Column::new(chunk, position);
 
-        let loaded_chunk = Column::new(bytes.freeze(), chunk, position);
-
-        Ok(loaded_chunk)
-    })
+    Ok(loaded_chunk)
 }
 
 fn encode_chunk_packet(
     chunk: &ColumnData,
     location: IVec2,
     state: &mut TasksState,
-) -> anyhow::Result<Option<BytesMut>> {
+) -> anyhow::Result<BytesMut> {
     let encoder = PacketEncoder::new(CompressionThreshold::from(6));
 
     let section_count = CHUNK_HEIGHT_SPAN as usize / 16_usize;
@@ -353,7 +341,7 @@ fn encode_chunk_packet(
 
     let result = encoder.append_packet(&pkt, buf, scratch, compressor)?;
 
-    Ok(Some(result))
+    Ok(result)
 }
 
 fn write_block_states(

@@ -223,7 +223,10 @@ impl Blocks {
     }
 
     #[must_use]
-    pub fn get_and_wait(&self, position: I16Vec2) -> Pin<Box<dyn Future<Output = Bytes> + Send>> {
+    pub fn get_and_wait(
+        &mut self,
+        position: I16Vec2,
+    ) -> Pin<Box<dyn Future<Output = Bytes> + Send>> {
         if let Some(cached) = self.get_cached(position) {
             return Box::pin(core::future::ready(cached));
         }
@@ -237,12 +240,12 @@ impl Blocks {
         let blocks_tx = self.tx_loaded_chunks.clone();
 
         let result = async move {
-            let Some(result) = rx.recv().await else {
+            let Some(mut result) = rx.recv().await else {
                 error!("failed to get chunk from cache");
                 return Bytes::new();
             };
 
-            let bytes = result.base_packet_bytes.clone();
+            let bytes = result.bytes();
 
             // forward to the main channel
             blocks_tx.send(result).unwrap();
@@ -442,16 +445,9 @@ impl Blocks {
         Ok(old_state)
     }
 
-    // todo: allow modifying the chunk. we will need to implement resending
-    // So,
-    // for instance, if a player modifies a chunk, we're going to need to rebroadcast it to all the players in that region.
-    // However, I'm going to wait until my broadcasting code using the new proxy is done before I do this.
-    // If you want to implement this, I also recommend waiting until that's done.
-    // That should be done in a couple of days, probably.
-
     #[must_use]
-    pub fn get_cached(&self, position: I16Vec2) -> Option<Bytes> {
-        if let Some(result) = self.chunk_cache.get(&position) {
+    pub fn get_cached(&mut self, position: I16Vec2) -> Option<Bytes> {
+        if let Some(result) = self.chunk_cache.get_mut(&position) {
             return Some(result.bytes());
         }
 

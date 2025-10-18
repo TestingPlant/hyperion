@@ -89,6 +89,8 @@ impl Blocks {
                         }
                     }
                 }
+
+                chunk.invalidate_cache();
             }
         }
     }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
+use glam::IVec2;
 use thiserror::Error;
 use tracing::warn;
 use valence_anvil::RegionError;
@@ -10,7 +12,7 @@ use valence_protocol::Ident;
 use valence_registry::biome::BiomeId;
 use valence_server::layer::chunk::{Chunk, check_biome_oob, check_block_oob, check_section_oob};
 
-use crate::simulation::blocks::loader::parse::section::Section;
+use crate::simulation::blocks::loader::{STATE, encode_chunk_packet, parse::section::Section};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -81,6 +83,8 @@ pub mod section;
 
 #[derive(Clone, Default, Debug)]
 pub struct ColumnData {
+    /// The cached raw (usually compressed) bytes of the chunk that are sent to the client via the Minecraft protocol
+    pub base_packet_bytes: Option<Bytes>,
     pub sections: Vec<Section>,
     pub block_entities: BTreeMap<u32, Compound>,
 }
@@ -88,6 +92,7 @@ pub struct ColumnData {
 impl ColumnData {
     pub fn new(height: u32) -> Self {
         Self {
+            base_packet_bytes: None,
             sections: vec![Section::default(); height as usize / 16],
             block_entities: BTreeMap::new(),
         }
@@ -95,6 +100,7 @@ impl ColumnData {
 
     pub fn new_with(height: u32, f: impl Fn() -> Section) -> Self {
         Self {
+            base_packet_bytes: None,
             sections: vec![f(); height as usize / 16],
             block_entities: BTreeMap::new(),
         }
@@ -102,6 +108,7 @@ impl ColumnData {
 
     pub fn set_delta(&mut self, x: u32, y: u32, z: u32, block: BlockState) -> BlockState {
         check_block_oob(self, x, y, z);
+        self.invalidate_cache();
 
         let idx = x + z * 16 + y % 16 * 16 * 16;
 
@@ -111,6 +118,24 @@ impl ColumnData {
         let idx = u16::try_from(idx).unwrap();
 
         self.sections[y as usize / 16].set_delta(idx, block)
+    }
+
+    pub fn base_packet_bytes(&mut self, chunk_location: IVec2) -> Bytes {
+        if let Some(bytes) = self.base_packet_bytes.clone() {
+            bytes
+        } else {
+            let bytes = STATE.with_borrow_mut(|state| {
+                encode_chunk_packet(self, chunk_location, state)
+                    .unwrap()
+                    .freeze()
+            });
+            self.base_packet_bytes = Some(bytes.clone());
+            bytes
+        }
+    }
+
+    pub fn invalidate_cache(&mut self) {
+        self.base_packet_bytes = None;
     }
 }
 
